@@ -1,3 +1,3 @@
-create schema if not exists stg;
+create schema if not exists team_vdga_stg;
 
-create schema if not exists metadata;
+create schema if not exists team_vdga_metadata;

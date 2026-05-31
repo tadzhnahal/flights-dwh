@@ -1,4 +1,4 @@
-create table if not exists stg.airports (
+create table if not exists team_vdga_stg.airports (
     airport_dk bigint generated always as identity primary key,
     airport_id bigint,
     ident text,
@@ -24,4 +24,4 @@ create table if not exists stg.airports (
 );
 
 create index if not exists airports_iata_code_idx
-on stg.airports (iata_code);
+on team_vdga_stg.airports (iata_code);

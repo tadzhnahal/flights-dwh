@@ -1,4 +1,4 @@
-create table if not exists metadata.etl_load_log (
+create table if not exists team_vdga_metadata.etl_load_log (
     id bigint generated always as identity primary key,
     flow_name text not null,
     source_file text,
@@ -11,5 +11,5 @@ create table if not exists metadata.etl_load_log (
 );
 
 create unique index if not exists etl_load_log_success_file_idx
-on metadata.etl_load_log (flow_name, source_file)
+on team_vdga_metadata.etl_load_log (flow_name, source_file)
 where status = 'success' and source_file is not null;
