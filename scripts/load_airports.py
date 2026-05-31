@@ -5,11 +5,16 @@ import os
 from datetime import datetime, timezone
 from io import StringIO
 
+import psycopg2
 import requests
 from dotenv import load_dotenv
+from psycopg2.extras import execute_values
 
 
 logger = logging.getLogger(__name__)
+
+
+TARGET_TABLE = "team_vdga_stg.airports"
 
 
 AIRPORT_COLUMNS = [
@@ -185,6 +190,46 @@ def print_summary(rows):
         )
 
 
+def get_connection():
+    host = get_env("POSTGRES_HOST")
+    port = get_env("POSTGRES_PORT")
+    db = get_env("POSTGRES_DB")
+    username = get_env("POSTGRES_USER")
+    password = get_env("POSTGRES_PASSWORD")
+
+    return psycopg2.connect(
+        host=host,
+        port=port,
+        dbname=db,
+        user=username,
+        password=password,
+        connect_timeout=5,
+    )
+
+
+def load_airports_to_postgres(prepared_rows):
+    columns_sql = ", ".join(INSERT_COLUMNS)
+
+    sql = f"""
+        insert into {TARGET_TABLE} ({columns_sql})
+        values %s
+    """
+
+    logger.info("load airports into %s", TARGET_TABLE)
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"truncate table {TARGET_TABLE} restart identity;")
+                execute_values(cursor, sql, prepared_rows, page_size=1000)
+    finally:
+        connection.close()
+
+    logger.info("airports loaded: %s", len(prepared_rows))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -196,11 +241,6 @@ def main():
 
     setup_logging()
     load_dotenv()
-
-    if not args.dry_run:
-        logger.warning("only dry-run mode is ready now")
-        logger.warning("run: python scripts/load_airports.py --dry-run")
-        return
 
     text = download_airports_csv()
     columns, rows = read_airports(text)
@@ -214,6 +254,12 @@ def main():
     logger.info("prepared rows: %s", len(prepared_rows))
 
     print_summary(rows)
+
+    if args.dry_run:
+        logger.info("dry-run finished")
+        return
+
+    load_airports_to_postgres(prepared_rows)
 
 
 if __name__ == "__main__":
