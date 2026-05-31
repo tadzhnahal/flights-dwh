@@ -2,6 +2,7 @@ import argparse
 import csv
 import logging
 import os
+from datetime import datetime, timezone
 from io import StringIO
 
 import requests
@@ -34,6 +35,31 @@ AIRPORT_COLUMNS = [
 ]
 
 
+INSERT_COLUMNS = [
+    "airport_id",
+    "ident",
+    "type",
+    "name",
+    "latitude_deg",
+    "longitude_deg",
+    "elevation_ft",
+    "continent",
+    "iso_country",
+    "iso_region",
+    "municipality",
+    "scheduled_service",
+    "icao_code",
+    "iata_code",
+    "gps_code",
+    "local_code",
+    "home_link",
+    "wikipedia_link",
+    "keywords",
+    "timezone",
+    "loaded_at",
+]
+
+
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -48,6 +74,27 @@ def get_env(name, required=True, default=None):
         raise ValueError(f"missing env variable: {name}")
 
     return value
+
+
+def clean_text(value):
+    if value == "":
+        return None
+
+    return value
+
+
+def clean_int(value):
+    if value == "":
+        return None
+
+    return int(value)
+
+
+def clean_float(value):
+    if value == "":
+        return None
+
+    return float(value)
 
 
 def download_airports_csv():
@@ -81,6 +128,40 @@ def check_columns(columns):
     if "timezone" not in columns:
         logger.warning("timezone column not found in airports.csv")
         logger.warning("timezone will be null in team_vdga_stg.airports")
+
+
+def prepare_airport_rows(rows):
+    prepared_rows = []
+    loaded_at = datetime.now(timezone.utc)
+
+    for row in rows:
+        prepared_rows.append(
+            (
+                clean_int(row.get("id")),
+                clean_text(row.get("ident")),
+                clean_text(row.get("type")),
+                clean_text(row.get("name")),
+                clean_float(row.get("latitude_deg")),
+                clean_float(row.get("longitude_deg")),
+                clean_int(row.get("elevation_ft")),
+                clean_text(row.get("continent")),
+                clean_text(row.get("iso_country")),
+                clean_text(row.get("iso_region")),
+                clean_text(row.get("municipality")),
+                clean_text(row.get("scheduled_service")),
+                clean_text(row.get("icao_code")),
+                clean_text(row.get("iata_code")),
+                clean_text(row.get("gps_code")),
+                clean_text(row.get("local_code")),
+                clean_text(row.get("home_link")),
+                clean_text(row.get("wikipedia_link")),
+                clean_text(row.get("keywords")),
+                None,
+                loaded_at,
+            )
+        )
+
+    return prepared_rows
 
 
 def print_summary(rows):
@@ -128,6 +209,10 @@ def main():
     logger.info("rows: %s", len(rows))
 
     check_columns(columns)
+
+    prepared_rows = prepare_airport_rows(rows)
+    logger.info("prepared rows: %s", len(prepared_rows))
+
     print_summary(rows)
 
 
