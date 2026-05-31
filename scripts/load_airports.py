@@ -1,11 +1,37 @@
 import argparse
+import csv
 import logging
 import os
+from io import StringIO
 
+import requests
 from dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
+
+
+AIRPORT_COLUMNS = [
+    "id",
+    "ident",
+    "type",
+    "name",
+    "latitude_deg",
+    "longitude_deg",
+    "elevation_ft",
+    "continent",
+    "iso_country",
+    "iso_region",
+    "municipality",
+    "scheduled_service",
+    "icao_code",
+    "iata_code",
+    "gps_code",
+    "local_code",
+    "home_link",
+    "wikipedia_link",
+    "keywords",
+]
 
 
 def setup_logging():
@@ -24,6 +50,39 @@ def get_env(name, required=True, default=None):
     return value
 
 
+def download_airports_csv():
+    url = get_env("AIRPORTS_CSV_URL")
+
+    logger.info("download airports csv: %s", url)
+
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+
+    return response.text
+
+
+def read_airports(text):
+    reader = csv.DictReader(StringIO(text))
+    rows = list(reader)
+
+    return reader.fieldnames, rows
+
+
+def check_columns(columns):
+    missing_columns = []
+
+    for column in AIRPORT_COLUMNS:
+        if column not in columns:
+            missing_columns.append(column)
+
+    if missing_columns:
+        raise ValueError(f"missing columns: {missing_columns}")
+
+    if "timezone" not in columns:
+        logger.warning("timezone column not found in airports.csv")
+        logger.warning("timezone will be null in team_vdga_stg.airports")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -36,11 +95,18 @@ def main():
     setup_logging()
     load_dotenv()
 
-    url = get_env("AIRPORTS_CSV_URL")
-    logger.info("airports csv url: %s", url)
+    if not args.dry_run:
+        logger.warning("only dry-run mode is ready now")
+        logger.warning("run: python scripts/load_airports.py --dry-run")
+        return
 
-    if args.dry_run:
-        logger.info("dry-run mode is on")
+    text = download_airports_csv()
+    columns, rows = read_airports(text)
+
+    logger.info("columns: %s", columns)
+    logger.info("rows: %s", len(rows))
+
+    check_columns(columns)
 
 
 if __name__ == "__main__":
