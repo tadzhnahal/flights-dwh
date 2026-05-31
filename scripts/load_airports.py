@@ -83,6 +83,27 @@ def check_columns(columns):
         logger.warning("timezone will be null in team_vdga_stg.airports")
 
 
+def print_summary(rows):
+    iata_count = 0
+
+    for row in rows:
+        if row.get("iata_code"):
+            iata_count += 1
+
+    logger.info("rows with iata_code: %s", iata_count)
+
+    logger.info("sample rows:")
+    for row in rows[:5]:
+        logger.info(
+            "id=%s ident=%s type=%s name=%s iata_code=%s",
+            row.get("id"),
+            row.get("ident"),
+            row.get("type"),
+            row.get("name"),
+            row.get("iata_code"),
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -107,6 +128,7 @@ def main():
     logger.info("rows: %s", len(rows))
 
     check_columns(columns)
+    print_summary(rows)
 
 
 if __name__ == "__main__":
