@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s",)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def get_env(name, required=True, default=None):
