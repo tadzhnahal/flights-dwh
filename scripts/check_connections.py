@@ -1,4 +1,5 @@
 import argparse
+import logging
 import os
 
 import boto3
@@ -6,6 +7,13 @@ import psycopg2
 import requests
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
+
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s",)
 
 
 def get_env(name, required=True, default=None):
@@ -33,7 +41,7 @@ def make_s3_client():
 
 
 def check_s3_prefix(s3_client, bucket, prefix):
-    print(f"bucket: {bucket}, prefix: {prefix}")
+    logger.info("bucket=%s prefix=%s", bucket, prefix)
 
     try:
         response = s3_client.list_objects_v2(
@@ -42,18 +50,18 @@ def check_s3_prefix(s3_client, bucket, prefix):
             MaxKeys=5,
         )
     except ClientError as e:
-        print(f"s3 check failed: {e}")
-        return
+        logger.error("s3 check failed: %s", e)
+        return False
 
     objects = response.get("Contents", [])
 
     if not objects:
-        print("objects not found")
-        return
+        logger.warning("objects not found")
+        return False
 
-    print("objects found:")
+    logger.info("objects found:")
     for item in objects:
-        print(f"- {item['Key']}")
+        logger.info("- %s", item["Key"])
 
     return True
 
@@ -67,7 +75,7 @@ def create_airflow_team_folder(s3_client):
 
     marker_key = f"{folder}/.keep"
 
-    print(f"create team folder marker: s3://{bucket}/{marker_key}")
+    logger.info("create team folder marker: s3://%s/%s", bucket, marker_key)
 
     try:
         s3_client.put_object(
@@ -76,29 +84,29 @@ def create_airflow_team_folder(s3_client):
             Body=b"",
         )
     except ClientError as e:
-        print(f"team folder create failed: {e}")
+        logger.error("team folder create failed: %s", e)
         return
 
-    print("team folder marker is ready")
+    logger.info("team folder marker is ready")
 
 
 def check_airflow_ui():
     airflow_url = get_env("AIRFLOW_URL", required=False)
 
     if not airflow_url:
-        print("airflow ui check skipped")
-        print("AIRFLOW_URL is empty")
+        logger.warning("airflow ui check skipped")
+        logger.warning("AIRFLOW_URL is empty")
         return
 
-    print(f"check airflow ui: {airflow_url}")
+    logger.info("check airflow ui: %s", airflow_url)
 
     try:
         response = requests.get(airflow_url, timeout=10)
     except requests.RequestException as e:
-        print(f"airflow ui check failed: {e}")
+        logger.error("airflow ui check failed: %s", e)
         return
 
-    print(f"airflow ui status code: {response.status_code}")
+    logger.info("airflow ui status code: %s", response.status_code)
 
 
 def check_postgres():
@@ -109,11 +117,11 @@ def check_postgres():
     password = get_env("POSTGRES_PASSWORD", required=False)
 
     if not all([host, port, db, user, password]):
-        print("postgres check skipped")
-        print("postgres env variables are not complete")
+        logger.warning("postgres check skipped")
+        logger.warning("postgres env variables are not complete")
         return
 
-    print(f"check postgres: {host}:{port}/{db}")
+    logger.info("check postgres: %s:%s/%s", host, port, db)
 
     try:
         connection = psycopg2.connect(
@@ -125,14 +133,14 @@ def check_postgres():
             connect_timeout=5,
         )
     except psycopg2.Error as e:
-        print(f"postgres check failed: {e}")
+        logger.error("postgres check failed: %s", e)
         return
 
     try:
         with connection.cursor() as cursor:
             cursor.execute("select current_database(), current_user;")
             row = cursor.fetchone()
-            print(f"postgres ok: database={row[0]}, user={row[1]}")
+            logger.info("postgres ok: database=%s user=%s", row[0], row[1])
     finally:
         connection.close()
 
@@ -146,6 +154,7 @@ def main():
     )
     args = parser.parse_args()
 
+    setup_logging()
     load_dotenv()
 
     s3_client = make_s3_client()
@@ -155,23 +164,21 @@ def main():
     airflow_bucket = get_env("AIRFLOW_DAGS_BUCKET")
     airflow_team_folder = get_env("AIRFLOW_TEAM_FOLDER", required=False, default="")
 
-    print("check source s3")
+    logger.info("check source s3")
     check_s3_prefix(
         s3_client=s3_client,
         bucket=source_bucket,
         prefix=f"{flights_prefix}/",
     )
 
-    print()
-    print("check airflow s3 root")
+    logger.info("check airflow s3 root")
     check_s3_prefix(
         s3_client=s3_client,
         bucket=airflow_bucket,
         prefix="",
     )
 
-    print()
-    print("check airflow team folder")
+    logger.info("check airflow team folder")
     check_s3_prefix(
         s3_client=s3_client,
         bucket=airflow_bucket,
@@ -179,13 +186,9 @@ def main():
     )
 
     if args.create_airflow_folder:
-        print()
         create_airflow_team_folder(s3_client)
 
-    print()
     check_airflow_ui()
-
-    print()
     check_postgres()
 
 
