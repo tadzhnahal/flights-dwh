@@ -1,43 +1,13 @@
 import argparse
 import logging
-import os
 from pathlib import Path
 
-import psycopg2
 from dotenv import load_dotenv
+
+from common import get_postgres_connection, setup_logging
 
 
 logger = logging.getLogger(__name__)
-
-
-def setup_logging():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-
-def get_env(name, required=True, default=None):
-    value = os.getenv(name, default)
-
-    if required and not value:
-        raise ValueError(f"missing env variable: {name}")
-
-    return value
-
-
-def get_connection():
-    host = get_env("POSTGRES_HOST")
-    port = get_env("POSTGRES_PORT")
-    db = get_env("POSTGRES_DB")
-    username = get_env("POSTGRES_USER")
-    password = get_env("POSTGRES_PASSWORD")
-
-    return psycopg2.connect(
-        host=host,
-        port=port,
-        dbname=db,
-        user=username,
-        password=password,
-        connect_timeout=5,
-    )
 
 
 def read_sql_file(path):
@@ -54,7 +24,7 @@ def run_sql_file(path):
 
     logger.info("run sql file: %s", path)
 
-    connection = get_connection()
+    connection = get_postgres_connection()
 
     try:
         with connection:

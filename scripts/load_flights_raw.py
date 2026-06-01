@@ -2,22 +2,22 @@ import argparse
 import csv
 import gzip
 import logging
-import os
 from datetime import datetime, timezone
 from io import BytesIO, TextIOWrapper
 
-import boto3
-import psycopg2
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from psycopg2.extras import execute_values
+
+from cleaning import clean_bool, clean_float, clean_text
+from common import get_env, get_postgres_connection, make_s3_client, setup_logging
+from load_log import is_file_loaded, write_load_log
 
 
 logger = logging.getLogger(__name__)
 
 
 TARGET_TABLE = "team_vdga_stg.flights_raw"
-LOG_TABLE = "team_vdga_metadata.etl_load_log"
 FLOW_NAME = "stg_flights_raw"
 
 
@@ -81,22 +81,6 @@ REQUIRED_COLUMNS = [
 ]
 
 
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
-
-
-def get_env(name, required=True, default=None):
-    value = os.getenv(name, default)
-
-    if required and not value:
-        raise ValueError(f"missing env variable: {name}")
-
-    return value
-
-
 def check_args(args):
     if args.dry_run and args.load_to_postgres:
         raise ValueError("choose only one mode: --dry-run or --load-to-postgres")
@@ -107,21 +91,6 @@ def check_flight_date(flight_date):
         datetime.strptime(flight_date, "%Y-%m-%d")
     except ValueError:
         raise ValueError("flight date must have format yyyy-mm-dd")
-
-
-def make_s3_client():
-    endpoint_url = get_env("S3_ENDPOINT_URL")
-    access_key = get_env("AWS_ACCESS_KEY_ID")
-    secret_key = get_env("AWS_SECRET_ACCESS_KEY")
-    region = get_env("AWS_DEFAULT_REGION", required=False, default="ru-central1")
-
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint_url,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name=region,
-    )
 
 
 def build_source_key(flights_prefix, flight_date):
@@ -205,27 +174,6 @@ def check_columns(columns):
         raise ValueError(f"missing columns: {missing_columns}")
 
     logger.info("required columns found")
-
-
-def clean_text(value):
-    if value == "" or value is None:
-        return None
-
-    return value
-
-
-def clean_float(value):
-    if value == "" or value is None:
-        return None
-
-    return float(value)
-
-
-def clean_bool(value):
-    if value == "" or value is None:
-        return None
-
-    return float(value) == 1.0
 
 
 def get_year_month(flight_dt):
@@ -344,23 +292,6 @@ def print_prepared_preview(prepared_rows):
         )
 
 
-def get_connection():
-    host = get_env("POSTGRES_HOST")
-    port = get_env("POSTGRES_PORT")
-    db = get_env("POSTGRES_DB")
-    username = get_env("POSTGRES_USER")
-    password = get_env("POSTGRES_PASSWORD")
-
-    return psycopg2.connect(
-        host=host,
-        port=port,
-        dbname=db,
-        user=username,
-        password=password,
-        connect_timeout=5,
-    )
-
-
 def get_log_flight_dt(prepared_rows):
     if not prepared_rows:
         return None
@@ -368,50 +299,6 @@ def get_log_flight_dt(prepared_rows):
     row_data = dict(zip(INSERT_COLUMNS, prepared_rows[0]))
 
     return row_data.get("flight_dt")
-
-
-def is_file_loaded(cursor, source_key):
-    sql = f"""
-        select 1
-        from {LOG_TABLE}
-        where flow_name = %s
-          and source_file = %s
-          and status = 'success'
-        limit 1
-    """
-
-    cursor.execute(sql, (FLOW_NAME, source_key))
-    row = cursor.fetchone()
-
-    return row is not None
-
-
-def write_load_log(cursor, source_key, flight_dt, rows_loaded, status, error_message=None):
-    sql = f"""
-        insert into {LOG_TABLE} (
-            flow_name,
-            source_file,
-            flight_dt,
-            rows_loaded,
-            status,
-            error_message,
-            loaded_at,
-            updated_at
-        )
-        values (%s, %s, %s, %s, %s, %s, now(), now())
-    """
-
-    cursor.execute(
-        sql,
-        (
-            FLOW_NAME,
-            source_key,
-            flight_dt,
-            rows_loaded,
-            status,
-            error_message,
-        ),
-    )
 
 
 def load_flights_to_postgres(prepared_rows, source_key):
@@ -428,11 +315,11 @@ def load_flights_to_postgres(prepared_rows, source_key):
 
     logger.info("load flights into %s", TARGET_TABLE)
 
-    connection = get_connection()
+    connection = get_postgres_connection()
 
     try:
         with connection.cursor() as cursor:
-            if is_file_loaded(cursor, source_key):
+            if is_file_loaded(cursor, FLOW_NAME, source_key):
                 connection.commit()
                 logger.info("source file already loaded: %s", source_key)
                 return "skipped"
@@ -441,6 +328,7 @@ def load_flights_to_postgres(prepared_rows, source_key):
                 execute_values(cursor, insert_sql, prepared_rows, page_size=1000)
                 write_load_log(
                     cursor=cursor,
+                    flow_name=FLOW_NAME,
                     source_key=source_key,
                     flight_dt=flight_dt,
                     rows_loaded=len(prepared_rows),
@@ -455,6 +343,7 @@ def load_flights_to_postgres(prepared_rows, source_key):
                 with connection.cursor() as error_cursor:
                     write_load_log(
                         cursor=error_cursor,
+                        flow_name=FLOW_NAME,
                         source_key=source_key,
                         flight_dt=flight_dt,
                         rows_loaded=0,

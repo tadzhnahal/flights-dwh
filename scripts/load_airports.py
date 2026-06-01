@@ -1,14 +1,15 @@
 import argparse
 import csv
 import logging
-import os
 from datetime import datetime, timezone
 from io import StringIO
 
-import psycopg2
 import requests
 from dotenv import load_dotenv
 from psycopg2.extras import execute_values
+
+from cleaning import clean_float, clean_int, clean_text
+from common import get_env, get_postgres_connection, setup_logging
 
 
 logger = logging.getLogger(__name__)
@@ -63,43 +64,6 @@ INSERT_COLUMNS = [
     "timezone",
     "loaded_at",
 ]
-
-
-def setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s: %(message)s",
-    )
-
-
-def get_env(name, required=True, default=None):
-    value = os.getenv(name, default)
-
-    if required and not value:
-        raise ValueError(f"missing env variable: {name}")
-
-    return value
-
-
-def clean_text(value):
-    if value == "":
-        return None
-
-    return value
-
-
-def clean_int(value):
-    if value == "":
-        return None
-
-    return int(value)
-
-
-def clean_float(value):
-    if value == "":
-        return None
-
-    return float(value)
 
 
 def download_airports_csv():
@@ -190,23 +154,6 @@ def print_summary(rows):
         )
 
 
-def get_connection():
-    host = get_env("POSTGRES_HOST")
-    port = get_env("POSTGRES_PORT")
-    db = get_env("POSTGRES_DB")
-    username = get_env("POSTGRES_USER")
-    password = get_env("POSTGRES_PASSWORD")
-
-    return psycopg2.connect(
-        host=host,
-        port=port,
-        dbname=db,
-        user=username,
-        password=password,
-        connect_timeout=5,
-    )
-
-
 def load_airports_to_postgres(prepared_rows):
     columns_sql = ", ".join(INSERT_COLUMNS)
 
@@ -217,12 +164,11 @@ def load_airports_to_postgres(prepared_rows):
 
     logger.info("load airports into %s", TARGET_TABLE)
 
-    connection = get_connection()
+    connection = get_postgres_connection()
 
     try:
         with connection:
             with connection.cursor() as cursor:
-                cursor.execute(f"truncate table {TARGET_TABLE} restart identity;")
                 execute_values(cursor, sql, prepared_rows, page_size=1000)
     finally:
         connection.close()
