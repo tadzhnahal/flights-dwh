@@ -97,6 +97,11 @@ def get_env(name, required=True, default=None):
     return value
 
 
+def check_args(args):
+    if args.dry_run and args.load_to_postgres:
+        raise ValueError("choose only one mode: --dry-run or --load-to-postgres")
+
+
 def check_flight_date(flight_date):
     try:
         datetime.strptime(flight_date, "%Y-%m-%d")
@@ -280,6 +285,11 @@ def prepare_flight_rows(rows, source_key):
     return prepared_rows
 
 
+def check_prepared_rows(prepared_rows):
+    if not prepared_rows:
+        raise ValueError("prepared rows is empty")
+
+
 def warn_if_dates_differ(folder_date, sample_rows):
     flight_dates = set()
 
@@ -405,6 +415,8 @@ def write_load_log(cursor, source_key, flight_dt, rows_loaded, status, error_mes
 
 
 def load_flights_to_postgres(prepared_rows, source_key):
+    check_prepared_rows(prepared_rows)
+
     columns_sql = ", ".join(INSERT_COLUMNS)
 
     insert_sql = f"""
@@ -421,8 +433,9 @@ def load_flights_to_postgres(prepared_rows, source_key):
     try:
         with connection.cursor() as cursor:
             if is_file_loaded(cursor, source_key):
+                connection.commit()
                 logger.info("source file already loaded: %s", source_key)
-                return
+                return "skipped"
 
             try:
                 execute_values(cursor, insert_sql, prepared_rows, page_size=1000)
@@ -435,6 +448,7 @@ def load_flights_to_postgres(prepared_rows, source_key):
                 )
                 connection.commit()
                 logger.info("flights loaded: %s", len(prepared_rows))
+                return "loaded"
             except Exception as error:
                 connection.rollback()
 
@@ -477,6 +491,7 @@ def main():
     setup_logging()
     load_dotenv()
 
+    check_args(args)
     check_flight_date(args.flight_date)
 
     source_bucket = get_env("SOURCE_S3_BUCKET")
@@ -500,6 +515,7 @@ def main():
     warn_if_dates_differ(args.flight_date, sample_rows)
 
     prepared_rows = prepare_flight_rows(rows, source_key)
+    check_prepared_rows(prepared_rows)
     print_prepared_preview(prepared_rows)
 
     if args.dry_run:
@@ -507,7 +523,8 @@ def main():
         return
 
     if args.load_to_postgres:
-        load_flights_to_postgres(prepared_rows, source_key)
+        result = load_flights_to_postgres(prepared_rows, source_key)
+        logger.info("postgres load result: %s", result)
         return
 
     logger.warning("postgres load skipped")
