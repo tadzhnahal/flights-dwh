@@ -72,6 +72,13 @@ def get_script_env():
         "https://ourairports.com/data/airports.csv",
     )
 
+    old_pythonpath = script_env.get("PYTHONPATH", "")
+
+    if old_pythonpath:
+        script_env["PYTHONPATH"] = f"{SCRIPTS_DIR}:{old_pythonpath}"
+    else:
+        script_env["PYTHONPATH"] = str(SCRIPTS_DIR)
+
     return script_env
 
 
@@ -104,12 +111,27 @@ def run_project_script(script_file_name, script_args):
         str(script_path),
     ] + script_args
 
-    subprocess.run(
+    print("run command:", " ".join(command))
+    print("project dir:", PROJECT_DIR)
+    print("scripts dir:", SCRIPTS_DIR)
+
+    result = subprocess.run(
         command,
         cwd=str(PROJECT_DIR),
         env=get_script_env(),
-        check=True,
+        text=True,
+        capture_output=True,
     )
+
+    if result.stdout:
+        print("script stdout:")
+        print(result.stdout)
+
+    if result.stderr:
+        print("script stderr:")
+        print(result.stderr)
+
+    result.check_returncode()
 
 
 with DAG(
