@@ -3,7 +3,7 @@ import csv
 import gzip
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO, TextIOWrapper
 
 import boto3
@@ -15,6 +15,38 @@ logger = logging.getLogger(__name__)
 
 
 target_table = "team_vdga_stg.flights_raw"
+
+
+insert_columns = [
+    "year",
+    "month",
+    "flight_dt",
+    "carrier_code",
+    "tail_num",
+    "carrier_flight_number",
+    "origin_code",
+    "dest_code",
+    "distance",
+    "scheduled_dep_tm",
+    "actual_dep_tm",
+    "dep_delay_min",
+    "scheduled_arr_tm",
+    "actual_arr_tm",
+    "arr_delay_min",
+    "taxi_out_min",
+    "wheels_off_tm",
+    "wheels_on_tm",
+    "taxi_in_min",
+    "carrier_delay_min",
+    "weather_delay_min",
+    "nas_delay_min",
+    "security_delay_min",
+    "late_aircraft_min",
+    "cancelled",
+    "cancellation_code",
+    "loaded_at",
+    "source_file",
+]
 
 
 required_columns = [
@@ -131,8 +163,8 @@ def normalize_row(row):
 
 
 def read_flights_gz(file_bytes):
+    rows = []
     sample_rows = []
-    row_count = 0
     columns = []
 
     with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gzip_file:
@@ -145,12 +177,12 @@ def read_flights_gz(file_bytes):
 
         for row in reader:
             normalized_row = normalize_row(row)
-            row_count += 1
+            rows.append(normalized_row)
 
             if len(sample_rows) < 5:
                 sample_rows.append(normalized_row)
 
-    return columns, row_count, sample_rows
+    return columns, rows, sample_rows
 
 
 def check_columns(columns):
@@ -193,42 +225,52 @@ def get_year_month(flight_dt):
     return date_value.year, date_value.month
 
 
-def prepare_preview_rows(sample_rows, source_key):
+def prepare_flight_row(row, source_key, loaded_at):
+    year, month = get_year_month(row.get("flightdate"))
+
+    return (
+        year,
+        month,
+        row.get("flightdate"),
+        clean_text(row.get("reporting_airline")),
+        clean_text(row.get("tail_number")),
+        clean_text(row.get("flight_number_reporting_airline")),
+        clean_text(row.get("origin")),
+        clean_text(row.get("dest")),
+        clean_float(row.get("distance")),
+        clean_text(row.get("crsdeptime")),
+        clean_text(row.get("deptime")),
+        clean_float(row.get("depdelayminutes")),
+        clean_text(row.get("crsarrtime")),
+        clean_text(row.get("arrtime")),
+        clean_float(row.get("arrdelayminutes")),
+        clean_float(row.get("taxiout")),
+        clean_text(row.get("wheelsoff")),
+        clean_text(row.get("wheelson")),
+        clean_float(row.get("taxiin")),
+        clean_float(row.get("carrierdelay")),
+        clean_float(row.get("weatherdelay")),
+        clean_float(row.get("nasdelay")),
+        clean_float(row.get("securitydelay")),
+        clean_float(row.get("lateaircraftdelay")),
+        clean_bool(row.get("cancelled")),
+        clean_text(row.get("cancellationcode")),
+        loaded_at,
+        source_key,
+    )
+
+
+def prepare_flight_rows(rows, source_key):
     prepared_rows = []
+    loaded_at = datetime.now(timezone.utc)
 
-    for row in sample_rows:
-        year, month = get_year_month(row.get("flightdate"))
-
+    for row in rows:
         prepared_rows.append(
-            {
-                "year": year,
-                "month": month,
-                "flight_dt": row.get("flightdate"),
-                "carrier_code": clean_text(row.get("reporting_airline")),
-                "tail_num": clean_text(row.get("tail_number")),
-                "carrier_flight_number": clean_text(row.get("flight_number_reporting_airline")),
-                "origin_code": clean_text(row.get("origin")),
-                "dest_code": clean_text(row.get("dest")),
-                "distance": clean_float(row.get("distance")),
-                "scheduled_dep_tm": clean_text(row.get("crsdeptime")),
-                "actual_dep_tm": clean_text(row.get("deptime")),
-                "dep_delay_min": clean_float(row.get("depdelayminutes")),
-                "scheduled_arr_tm": clean_text(row.get("crsarrtime")),
-                "actual_arr_tm": clean_text(row.get("arrtime")),
-                "arr_delay_min": clean_float(row.get("arrdelayminutes")),
-                "taxi_out_min": clean_float(row.get("taxiout")),
-                "wheels_off_tm": clean_text(row.get("wheelsoff")),
-                "wheels_on_tm": clean_text(row.get("wheelson")),
-                "taxi_in_min": clean_float(row.get("taxiin")),
-                "carrier_delay_min": clean_float(row.get("carrierdelay")),
-                "weather_delay_min": clean_float(row.get("weatherdelay")),
-                "nas_delay_min": clean_float(row.get("nasdelay")),
-                "security_delay_min": clean_float(row.get("securitydelay")),
-                "late_aircraft_min": clean_float(row.get("lateaircraftdelay")),
-                "cancelled": clean_bool(row.get("cancelled")),
-                "cancellation_code": clean_text(row.get("cancellationcode")),
-                "source_file": source_key,
-            }
+            prepare_flight_row(
+                row=row,
+                source_key=source_key,
+                loaded_at=loaded_at,
+            )
         )
 
     return prepared_rows
@@ -251,9 +293,9 @@ def warn_if_dates_differ(folder_date, sample_rows):
         )
 
 
-def print_summary(columns, row_count, sample_rows):
+def print_summary(columns, rows, sample_rows):
     logger.info("columns: %s", columns)
-    logger.info("rows: %s", row_count)
+    logger.info("rows: %s", len(rows))
 
     logger.info("sample rows:")
     for row in sample_rows:
@@ -270,18 +312,21 @@ def print_summary(columns, row_count, sample_rows):
 
 def print_prepared_preview(prepared_rows):
     logger.info("target table: %s", target_table)
+    logger.info("prepared rows: %s", len(prepared_rows))
     logger.info("prepared preview:")
 
-    for row in prepared_rows:
+    for row in prepared_rows[:5]:
+        row_data = dict(zip(insert_columns, row))
+
         logger.info(
             "flight_dt=%s carrier=%s origin=%s dest=%s dep_delay=%s arr_delay=%s source_file=%s",
-            row.get("flight_dt"),
-            row.get("carrier_code"),
-            row.get("origin_code"),
-            row.get("dest_code"),
-            row.get("dep_delay_min"),
-            row.get("arr_delay_min"),
-            row.get("source_file"),
+            row_data.get("flight_dt"),
+            row_data.get("carrier_code"),
+            row_data.get("origin_code"),
+            row_data.get("dest_code"),
+            row_data.get("dep_delay_min"),
+            row_data.get("arr_delay_min"),
+            row_data.get("source_file"),
         )
 
 
@@ -318,17 +363,21 @@ def main():
         raise FileNotFoundError(f"source file not found: s3://{source_bucket}/{source_key}")
 
     file_bytes = download_source_file(s3_client, source_bucket, source_key)
-    columns, row_count, sample_rows = read_flights_gz(file_bytes)
+    columns, rows, sample_rows = read_flights_gz(file_bytes)
 
     check_columns(columns)
-    print_summary(columns, row_count, sample_rows)
+    print_summary(columns, rows, sample_rows)
     warn_if_dates_differ(args.flight_date, sample_rows)
 
-    prepared_rows = prepare_preview_rows(sample_rows, source_key)
+    prepared_rows = prepare_flight_rows(rows, source_key)
     print_prepared_preview(prepared_rows)
 
     if args.dry_run:
         logger.info("dry-run finished")
+        return
+
+    logger.warning("postgres load is not ready in this step")
+    logger.warning("run with --dry-run")
 
 
 if __name__ == "__main__":
