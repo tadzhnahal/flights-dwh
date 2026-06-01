@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from io import BytesIO, TextIOWrapper
 
 import boto3
+import psycopg2
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
+from psycopg2.extras import execute_values
 
 
 logger = logging.getLogger(__name__)
@@ -199,21 +201,21 @@ def check_columns(columns):
 
 
 def clean_text(value):
-    if value == "":
+    if value == "" or value is None:
         return None
 
     return value
 
 
 def clean_float(value):
-    if value == "":
+    if value == "" or value is None:
         return None
 
     return float(value)
 
 
 def clean_bool(value):
-    if value == "":
+    if value == "" or value is None:
         return None
 
     return float(value) == 1.0
@@ -330,6 +332,45 @@ def print_prepared_preview(prepared_rows):
         )
 
 
+def get_connection():
+    host = get_env("POSTGRES_HOST")
+    port = get_env("POSTGRES_PORT")
+    db = get_env("POSTGRES_DB")
+    username = get_env("POSTGRES_USER")
+    password = get_env("POSTGRES_PASSWORD")
+
+    return psycopg2.connect(
+        host=host,
+        port=port,
+        dbname=db,
+        user=username,
+        password=password,
+        connect_timeout=5,
+    )
+
+
+def load_flights_to_postgres(prepared_rows):
+    columns_sql = ", ".join(insert_columns)
+
+    sql = f"""
+        insert into {target_table} ({columns_sql})
+        values %s
+    """
+
+    logger.info("load flights into %s", target_table)
+
+    connection = get_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                execute_values(cursor, sql, prepared_rows, page_size=1000)
+    finally:
+        connection.close()
+
+    logger.info("flights loaded: %s", len(prepared_rows))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -341,6 +382,11 @@ def main():
         "--dry-run",
         action="store_true",
         help="check source file without loading into postgres",
+    )
+    parser.add_argument(
+        "--load-to-postgres",
+        action="store_true",
+        help="load prepared rows into postgres",
     )
     args = parser.parse_args()
 
@@ -376,8 +422,12 @@ def main():
         logger.info("dry-run finished")
         return
 
-    logger.warning("postgres load is not ready in this step")
-    logger.warning("run with --dry-run")
+    if args.load_to_postgres:
+        load_flights_to_postgres(prepared_rows)
+        return
+
+    logger.warning("postgres load skipped")
+    logger.warning("run with --dry-run or --load-to-postgres")
 
 
 if __name__ == "__main__":
