@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
+target_table = "team_vdga_stg.flights_raw"
+
+
 required_columns = [
     "flightdate",
     "reporting_airline",
@@ -163,6 +166,91 @@ def check_columns(columns):
     logger.info("required columns found")
 
 
+def clean_text(value):
+    if value == "":
+        return None
+
+    return value
+
+
+def clean_float(value):
+    if value == "":
+        return None
+
+    return float(value)
+
+
+def clean_bool(value):
+    if value == "":
+        return None
+
+    return float(value) == 1.0
+
+
+def get_year_month(flight_dt):
+    date_value = datetime.strptime(flight_dt, "%Y-%m-%d")
+
+    return date_value.year, date_value.month
+
+
+def prepare_preview_rows(sample_rows, source_key):
+    prepared_rows = []
+
+    for row in sample_rows:
+        year, month = get_year_month(row.get("flightdate"))
+
+        prepared_rows.append(
+            {
+                "year": year,
+                "month": month,
+                "flight_dt": row.get("flightdate"),
+                "carrier_code": clean_text(row.get("reporting_airline")),
+                "tail_num": clean_text(row.get("tail_number")),
+                "carrier_flight_number": clean_text(row.get("flight_number_reporting_airline")),
+                "origin_code": clean_text(row.get("origin")),
+                "dest_code": clean_text(row.get("dest")),
+                "distance": clean_float(row.get("distance")),
+                "scheduled_dep_tm": clean_text(row.get("crsdeptime")),
+                "actual_dep_tm": clean_text(row.get("deptime")),
+                "dep_delay_min": clean_float(row.get("depdelayminutes")),
+                "scheduled_arr_tm": clean_text(row.get("crsarrtime")),
+                "actual_arr_tm": clean_text(row.get("arrtime")),
+                "arr_delay_min": clean_float(row.get("arrdelayminutes")),
+                "taxi_out_min": clean_float(row.get("taxiout")),
+                "wheels_off_tm": clean_text(row.get("wheelsoff")),
+                "wheels_on_tm": clean_text(row.get("wheelson")),
+                "taxi_in_min": clean_float(row.get("taxiin")),
+                "carrier_delay_min": clean_float(row.get("carrierdelay")),
+                "weather_delay_min": clean_float(row.get("weatherdelay")),
+                "nas_delay_min": clean_float(row.get("nasdelay")),
+                "security_delay_min": clean_float(row.get("securitydelay")),
+                "late_aircraft_min": clean_float(row.get("lateaircraftdelay")),
+                "cancelled": clean_bool(row.get("cancelled")),
+                "cancellation_code": clean_text(row.get("cancellationcode")),
+                "source_file": source_key,
+            }
+        )
+
+    return prepared_rows
+
+
+def warn_if_dates_differ(folder_date, sample_rows):
+    flight_dates = set()
+
+    for row in sample_rows:
+        flight_date = row.get("flightdate")
+
+        if flight_date:
+            flight_dates.add(flight_date)
+
+    if flight_dates and folder_date not in flight_dates:
+        logger.warning(
+            "folder date differs from flightdate in sample: folder=%s sample=%s",
+            folder_date,
+            sorted(flight_dates),
+        )
+
+
 def print_summary(columns, row_count, sample_rows):
     logger.info("columns: %s", columns)
     logger.info("rows: %s", row_count)
@@ -177,6 +265,23 @@ def print_summary(columns, row_count, sample_rows):
             row.get("dest"),
             row.get("depdelayminutes"),
             row.get("arrdelayminutes"),
+        )
+
+
+def print_prepared_preview(prepared_rows):
+    logger.info("target table: %s", target_table)
+    logger.info("prepared preview:")
+
+    for row in prepared_rows:
+        logger.info(
+            "flight_dt=%s carrier=%s origin=%s dest=%s dep_delay=%s arr_delay=%s source_file=%s",
+            row.get("flight_dt"),
+            row.get("carrier_code"),
+            row.get("origin_code"),
+            row.get("dest_code"),
+            row.get("dep_delay_min"),
+            row.get("arr_delay_min"),
+            row.get("source_file"),
         )
 
 
@@ -217,6 +322,10 @@ def main():
 
     check_columns(columns)
     print_summary(columns, row_count, sample_rows)
+    warn_if_dates_differ(args.flight_date, sample_rows)
+
+    prepared_rows = prepare_preview_rows(sample_rows, source_key)
+    print_prepared_preview(prepared_rows)
 
     if args.dry_run:
         logger.info("dry-run finished")
