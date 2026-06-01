@@ -67,6 +67,10 @@ def get_script_env():
         "FLIGHTS_PREFIX",
         "flights_us_data",
     )
+    script_env["AIRPORTS_CSV_URL"] = script_env.get(
+        "AIRPORTS_CSV_URL",
+        "https://ourairports.com/data/airports.csv",
+    )
 
     return script_env
 
@@ -154,6 +158,15 @@ with DAG(
         },
     )
 
+    load_airports = PythonOperator(
+        task_id="load_airports",
+        python_callable=run_project_script,
+        op_kwargs={
+            "script_file_name": "load_airports.py",
+            "script_args": [],
+        },
+    )
+
     load_flights_raw = PythonOperator(
         task_id="load_flights_raw",
         python_callable=run_project_script,
@@ -177,6 +190,7 @@ with DAG(
         >> create_load_log_table
         >> create_airports_table
         >> create_flights_raw_table
+        >> load_airports
         >> load_flights_raw
         >> finish
     )
