@@ -180,6 +180,18 @@ with DAG(
         },
     )
 
+    check_stg_quality = PythonOperator(
+        task_id="check_stg_quality",
+        python_callable=run_project_script,
+        op_kwargs={
+            "script_file_name": "check_stg_quality.py",
+            "script_args": [
+                "--flight-date",
+                FLIGHT_DATE,
+            ],
+        },
+    )
+
     finish = EmptyOperator(
         task_id="finish",
     )
@@ -192,5 +204,6 @@ with DAG(
         >> create_flights_raw_table
         >> load_airports
         >> load_flights_raw
+        >> check_stg_quality
         >> finish
     )
