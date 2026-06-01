@@ -16,10 +16,12 @@ from psycopg2.extras import execute_values
 logger = logging.getLogger(__name__)
 
 
-target_table = "team_vdga_stg.flights_raw"
+TARGET_TABLE = "team_vdga_stg.flights_raw"
+LOG_TABLE = "team_vdga_metadata.etl_load_log"
+FLOW_NAME = "stg_flights_raw"
 
 
-insert_columns = [
+INSERT_COLUMNS = [
     "year",
     "month",
     "flight_dt",
@@ -51,7 +53,7 @@ insert_columns = [
 ]
 
 
-required_columns = [
+REQUIRED_COLUMNS = [
     "flightdate",
     "reporting_airline",
     "tail_number",
@@ -190,7 +192,7 @@ def read_flights_gz(file_bytes):
 def check_columns(columns):
     missing_columns = []
 
-    for column in required_columns:
+    for column in REQUIRED_COLUMNS:
         if column not in columns:
             missing_columns.append(column)
 
@@ -313,12 +315,12 @@ def print_summary(columns, rows, sample_rows):
 
 
 def print_prepared_preview(prepared_rows):
-    logger.info("target table: %s", target_table)
+    logger.info("target table: %s", TARGET_TABLE)
     logger.info("prepared rows: %s", len(prepared_rows))
     logger.info("prepared preview:")
 
     for row in prepared_rows[:5]:
-        row_data = dict(zip(insert_columns, row))
+        row_data = dict(zip(INSERT_COLUMNS, row))
 
         logger.info(
             "flight_dt=%s carrier=%s origin=%s dest=%s dep_delay=%s arr_delay=%s source_file=%s",
@@ -349,21 +351,41 @@ def get_connection():
     )
 
 
-def load_flights_to_postgres(prepared_rows):
-    columns_sql = ", ".join(insert_columns)
+def is_file_loaded(cursor, source_key):
+    sql = f"""
+        select 1
+        from {LOG_TABLE}
+        where flow_name = %s
+          and source_file = %s
+          and status = 'success'
+        limit 1
+    """
+
+    cursor.execute(sql, (FLOW_NAME, source_key))
+    row = cursor.fetchone()
+
+    return row is not None
+
+
+def load_flights_to_postgres(prepared_rows, source_key):
+    columns_sql = ", ".join(INSERT_COLUMNS)
 
     sql = f"""
-        insert into {target_table} ({columns_sql})
+        insert into {TARGET_TABLE} ({columns_sql})
         values %s
     """
 
-    logger.info("load flights into %s", target_table)
+    logger.info("load flights into %s", TARGET_TABLE)
 
     connection = get_connection()
 
     try:
         with connection:
             with connection.cursor() as cursor:
+                if is_file_loaded(cursor, source_key):
+                    logger.info("source file already loaded: %s", source_key)
+                    return
+
                 execute_values(cursor, sql, prepared_rows, page_size=1000)
     finally:
         connection.close()
@@ -423,7 +445,7 @@ def main():
         return
 
     if args.load_to_postgres:
-        load_flights_to_postgres(prepared_rows)
+        load_flights_to_postgres(prepared_rows, source_key)
         return
 
     logger.warning("postgres load skipped")
