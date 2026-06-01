@@ -1,7 +1,10 @@
 import argparse
+import csv
+import gzip
 import logging
 import os
 from datetime import datetime
+from io import BytesIO, TextIOWrapper
 
 import boto3
 from botocore.exceptions import ClientError
@@ -31,7 +34,7 @@ def check_flight_date(flight_date):
     try:
         datetime.strptime(flight_date, "%Y-%m-%d")
     except ValueError:
-        raise ValueError("flight date must have format yyyy-mm-dd")
+        raise ValueError("flight_date must have format yyyy-mm-dd")
 
 
 def make_s3_client():
@@ -57,15 +60,83 @@ def check_source_file(s3_client, bucket, source_key):
     logger.info("check source file: s3://%s/%s", bucket, source_key)
 
     try:
-        response = s3_client.head_object(Bucket=bucket, Key=source_key)
-    except ClientError as e:
-        logger.error("source file check failed: %s", e)
+        response = s3_client.head_object(
+            Bucket=bucket,
+            Key=source_key,
+        )
+    except ClientError as error:
+        logger.error("source file check failed: %s", error)
         return False
 
     size = response.get("ContentLength", 0)
     logger.info("source file found, size: %s bytes", size)
 
     return True
+
+
+def download_source_file(s3_client, bucket, source_key):
+    logger.info("download source file")
+
+    response = s3_client.get_object(
+        Bucket=bucket,
+        Key=source_key,
+    )
+
+    return response["Body"].read()
+
+
+def normalize_column_name(name):
+    return name.strip().lower()
+
+
+def normalize_row(row):
+    normalized_row = {}
+
+    for key, value in row.items():
+        normalized_key = normalize_column_name(key)
+        normalized_row[normalized_key] = value
+
+    return normalized_row
+
+
+def read_flights_gz(file_bytes):
+    sample_rows = []
+    row_count = 0
+    columns = []
+
+    with gzip.GzipFile(fileobj=BytesIO(file_bytes)) as gzip_file:
+        text_file = TextIOWrapper(gzip_file, encoding="utf-8-sig")
+        reader = csv.DictReader(text_file)
+
+        if reader.fieldnames:
+            for column in reader.fieldnames:
+                columns.append(normalize_column_name(column))
+
+        for row in reader:
+            normalized_row = normalize_row(row)
+            row_count += 1
+
+            if len(sample_rows) < 5:
+                sample_rows.append(normalized_row)
+
+    return columns, row_count, sample_rows
+
+
+def print_summary(columns, row_count, sample_rows):
+    logger.info("columns: %s", columns)
+    logger.info("rows: %s", row_count)
+
+    logger.info("sample rows:")
+    for row in sample_rows:
+        logger.info(
+            "flightdate=%s carrier=%s origin=%s dest=%s dep_delay=%s arr_delay=%s",
+            row.get("flightdate"),
+            row.get("reporting_airline"),
+            row.get("origin"),
+            row.get("dest"),
+            row.get("depdelayminutes"),
+            row.get("arrdelayminutes"),
+        )
 
 
 def main():
@@ -78,7 +149,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="check source file without loading into postgres"
+        help="check source file without loading into postgres",
     )
     args = parser.parse_args()
 
@@ -100,8 +171,13 @@ def main():
     if not file_exists:
         raise FileNotFoundError(f"source file not found: s3://{source_bucket}/{source_key}")
 
+    file_bytes = download_source_file(s3_client, source_bucket, source_key)
+    columns, row_count, sample_rows = read_flights_gz(file_bytes)
+
+    print_summary(columns, row_count, sample_rows)
+
     if args.dry_run:
-        logger.info("dry-run mode is on")
+        logger.info("dry-run finished")
 
 
 if __name__ == "__main__":
