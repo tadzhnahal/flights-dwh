@@ -14,6 +14,34 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 
+required_columns = [
+    "flightdate",
+    "reporting_airline",
+    "tail_number",
+    "flight_number_reporting_airline",
+    "origin",
+    "dest",
+    "distance",
+    "crsdeptime",
+    "deptime",
+    "depdelayminutes",
+    "crsarrtime",
+    "arrtime",
+    "arrdelayminutes",
+    "taxiout",
+    "wheelsoff",
+    "wheelson",
+    "taxiin",
+    "carrierdelay",
+    "weatherdelay",
+    "nasdelay",
+    "securitydelay",
+    "lateaircraftdelay",
+    "cancelled",
+    "cancellationcode",
+]
+
+
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
@@ -34,7 +62,7 @@ def check_flight_date(flight_date):
     try:
         datetime.strptime(flight_date, "%Y-%m-%d")
     except ValueError:
-        raise ValueError("flight_date must have format yyyy-mm-dd")
+        raise ValueError("flight date must have format yyyy-mm-dd")
 
 
 def make_s3_client():
@@ -122,6 +150,19 @@ def read_flights_gz(file_bytes):
     return columns, row_count, sample_rows
 
 
+def check_columns(columns):
+    missing_columns = []
+
+    for column in required_columns:
+        if column not in columns:
+            missing_columns.append(column)
+
+    if missing_columns:
+        raise ValueError(f"missing columns: {missing_columns}")
+
+    logger.info("required columns found")
+
+
 def print_summary(columns, row_count, sample_rows):
     logger.info("columns: %s", columns)
     logger.info("rows: %s", row_count)
@@ -174,6 +215,7 @@ def main():
     file_bytes = download_source_file(s3_client, source_bucket, source_key)
     columns, row_count, sample_rows = read_flights_gz(file_bytes)
 
+    check_columns(columns)
     print_summary(columns, row_count, sample_rows)
 
     if args.dry_run:
