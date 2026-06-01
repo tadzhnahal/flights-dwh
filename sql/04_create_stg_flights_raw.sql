@@ -7,27 +7,25 @@ create table if not exists team_vdga_stg.flights_raw (
     tail_num text,
     carrier_flight_number text,
     origin_code text,
-    origin_city_name text,
     dest_code text,
-    dest_city_name text,
+    distance numeric(12, 2),
     scheduled_dep_tm text,
     actual_dep_tm text,
-    dep_delay_min integer,
-    dep_delay_group_num integer,
+    dep_delay_min numeric(12, 2),
     scheduled_arr_tm text,
     actual_arr_tm text,
-    arr_delay_min integer,
-    arr_delay_group_num integer,
+    arr_delay_min numeric(12, 2),
+    taxi_out_min numeric(12, 2),
+    wheels_off_tm text,
+    wheels_on_tm text,
+    taxi_in_min numeric(12, 2),
+    carrier_delay_min numeric(12, 2),
+    weather_delay_min numeric(12, 2),
+    nas_delay_min numeric(12, 2),
+    security_delay_min numeric(12, 2),
+    late_aircraft_min numeric(12, 2),
     cancelled boolean,
     cancellation_code text,
-    flights_cnt integer,
-    distance numeric(12, 2),
-    distance_group_num integer,
-    carrier_delay_min integer,
-    weather_delay_min integer,
-    nas_delay_min integer,
-    security_delay_min integer,
-    late_aircraft_min integer,
     loaded_at timestamptz not null default now(),
     source_file text not null
 );
@@ -40,3 +38,6 @@ on team_vdga_stg.flights_raw (source_file);
 
 create index if not exists flights_raw_origin_dest_idx
 on team_vdga_stg.flights_raw (origin_code, dest_code);
+
+create index if not exists flights_raw_carrier_code_idx
+on team_vdga_stg.flights_raw (carrier_code);
