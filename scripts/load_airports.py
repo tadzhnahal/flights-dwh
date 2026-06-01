@@ -154,10 +154,21 @@ def print_summary(rows):
         )
 
 
+def get_airports_rows_count(cursor):
+    sql = f"""
+        select count(*)
+        from {TARGET_TABLE};
+    """
+
+    cursor.execute(sql)
+
+    return cursor.fetchone()[0]
+
+
 def load_airports_to_postgres(prepared_rows):
     columns_sql = ", ".join(INSERT_COLUMNS)
 
-    sql = f"""
+    insert_sql = f"""
         insert into {TARGET_TABLE} ({columns_sql})
         values %s
     """
@@ -169,11 +180,19 @@ def load_airports_to_postgres(prepared_rows):
     try:
         with connection:
             with connection.cursor() as cursor:
-                execute_values(cursor, sql, prepared_rows, page_size=1000)
+                rows_count = get_airports_rows_count(cursor)
+
+                if rows_count > 0:
+                    logger.info("airports already loaded: %s rows", rows_count)
+                    return "skipped"
+
+                execute_values(cursor, insert_sql, prepared_rows, page_size=1000)
     finally:
         connection.close()
 
     logger.info("airports loaded: %s", len(prepared_rows))
+
+    return "loaded"
 
 
 def main():
@@ -205,7 +224,8 @@ def main():
         logger.info("dry-run finished")
         return
 
-    load_airports_to_postgres(prepared_rows)
+    result = load_airports_to_postgres(prepared_rows)
+    logger.info("postgres load result: %s", result)
 
 
 if __name__ == "__main__":
