@@ -1,16 +1,56 @@
 from datetime import datetime
+from pathlib import Path
 
 from airflow import DAG
+from airflow.hooks.base import BaseHook
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import PythonOperator
 
 
 DAG_ID = "team_vdga_stg_dag"
+POSTGRES_CONN_ID = "edu_dwh_postgres"
+
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+SQL_DIR = PROJECT_DIR / "sql"
 
 
 DEFAULT_ARGS = {
     "owner": "team_vdga",
     "depends_on_past": False,
 }
+
+
+def get_postgres_connection():
+    import psycopg2
+
+    airflow_connection = BaseHook.get_connection(POSTGRES_CONN_ID)
+
+    return psycopg2.connect(
+        host=airflow_connection.host,
+        port=airflow_connection.port or 5432,
+        dbname=airflow_connection.schema,
+        user=airflow_connection.login,
+        password=airflow_connection.password,
+        connect_timeout=5,
+    )
+
+
+def run_sql_file(sql_file_name):
+    sql_path = SQL_DIR / sql_file_name
+
+    if not sql_path.exists():
+        raise FileNotFoundError(f"sql file not found: {sql_path}")
+
+    sql_text = sql_path.read_text(encoding="utf-8")
+
+    connection = get_postgres_connection()
+
+    try:
+        with connection:
+            with connection.cursor() as cursor:
+                cursor.execute(sql_text)
+    finally:
+        connection.close()
 
 
 with DAG(
@@ -27,8 +67,47 @@ with DAG(
         task_id="start",
     )
 
+    create_schemas = PythonOperator(
+        task_id="create_schemas",
+        python_callable=run_sql_file,
+        op_kwargs={
+            "sql_file_name": "01_create_schemas.sql",
+        },
+    )
+
+    create_load_log_table = PythonOperator(
+        task_id="create_load_log_table",
+        python_callable=run_sql_file,
+        op_kwargs={
+            "sql_file_name": "02_create_load_log.sql",
+        },
+    )
+
+    create_airports_table = PythonOperator(
+        task_id="create_airports_table",
+        python_callable=run_sql_file,
+        op_kwargs={
+            "sql_file_name": "03_create_stg_airports.sql",
+        },
+    )
+
+    create_flights_raw_table = PythonOperator(
+        task_id="create_flights_raw_table",
+        python_callable=run_sql_file,
+        op_kwargs={
+            "sql_file_name": "04_create_stg_flights_raw.sql",
+        },
+    )
+
     finish = EmptyOperator(
         task_id="finish",
     )
 
-    start >> finish
+    (
+        start
+        >> create_schemas
+        >> create_load_log_table
+        >> create_airports_table
+        >> create_flights_raw_table
+        >> finish
+    )
