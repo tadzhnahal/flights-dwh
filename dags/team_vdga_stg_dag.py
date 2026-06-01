@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -9,9 +12,11 @@ from airflow.operators.python import PythonOperator
 
 DAG_ID = "team_vdga_stg_dag"
 POSTGRES_CONN_ID = "edu_dwh_postgres"
+FLIGHT_DATE = "2026-03-01"
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SQL_DIR = PROJECT_DIR / "sql"
+SCRIPTS_DIR = PROJECT_DIR / "scripts"
 
 
 DEFAULT_ARGS = {
@@ -35,6 +40,37 @@ def get_postgres_connection():
     )
 
 
+def get_script_env():
+    airflow_connection = BaseHook.get_connection(POSTGRES_CONN_ID)
+
+    script_env = os.environ.copy()
+
+    script_env["POSTGRES_HOST"] = airflow_connection.host
+    script_env["POSTGRES_PORT"] = str(airflow_connection.port or 5432)
+    script_env["POSTGRES_DB"] = airflow_connection.schema
+    script_env["POSTGRES_USER"] = airflow_connection.login
+    script_env["POSTGRES_PASSWORD"] = airflow_connection.password
+
+    script_env["S3_ENDPOINT_URL"] = script_env.get(
+        "S3_ENDPOINT_URL",
+        "https://storage.yandexcloud.net",
+    )
+    script_env["AWS_DEFAULT_REGION"] = script_env.get(
+        "AWS_DEFAULT_REGION",
+        "ru-central1",
+    )
+    script_env["SOURCE_S3_BUCKET"] = script_env.get(
+        "SOURCE_S3_BUCKET",
+        "gsbdwhdata",
+    )
+    script_env["FLIGHTS_PREFIX"] = script_env.get(
+        "FLIGHTS_PREFIX",
+        "flights_us_data",
+    )
+
+    return script_env
+
+
 def run_sql_file(sql_file_name):
     sql_path = SQL_DIR / sql_file_name
 
@@ -51,6 +87,25 @@ def run_sql_file(sql_file_name):
                 cursor.execute(sql_text)
     finally:
         connection.close()
+
+
+def run_project_script(script_file_name, script_args):
+    script_path = SCRIPTS_DIR / script_file_name
+
+    if not script_path.exists():
+        raise FileNotFoundError(f"script file not found: {script_path}")
+
+    command = [
+        sys.executable,
+        str(script_path),
+    ] + script_args
+
+    subprocess.run(
+        command,
+        cwd=str(PROJECT_DIR),
+        env=get_script_env(),
+        check=True,
+    )
 
 
 with DAG(
@@ -99,6 +154,19 @@ with DAG(
         },
     )
 
+    load_flights_raw = PythonOperator(
+        task_id="load_flights_raw",
+        python_callable=run_project_script,
+        op_kwargs={
+            "script_file_name": "load_flights_raw.py",
+            "script_args": [
+                "--flight-date",
+                FLIGHT_DATE,
+                "--load-to-postgres",
+            ],
+        },
+    )
+
     finish = EmptyOperator(
         task_id="finish",
     )
@@ -109,5 +177,6 @@ with DAG(
         >> create_load_log_table
         >> create_airports_table
         >> create_flights_raw_table
+        >> load_flights_raw
         >> finish
     )
