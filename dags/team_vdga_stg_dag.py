@@ -12,6 +12,7 @@ from airflow.operators.python import PythonOperator
 
 DAG_ID = "team_vdga_stg_dag"
 POSTGRES_CONN_ID = "edu_dwh_postgres"
+S3_CONN_ID = "team_vdga_s3"
 FLIGHT_DATE = "2026-03-01"
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -40,16 +41,28 @@ def get_postgres_connection():
     )
 
 
-def get_script_env():
+def add_postgres_env(script_env):
     airflow_connection = BaseHook.get_connection(POSTGRES_CONN_ID)
-
-    script_env = os.environ.copy()
 
     script_env["POSTGRES_HOST"] = airflow_connection.host
     script_env["POSTGRES_PORT"] = str(airflow_connection.port or 5432)
     script_env["POSTGRES_DB"] = airflow_connection.schema
     script_env["POSTGRES_USER"] = airflow_connection.login
     script_env["POSTGRES_PASSWORD"] = airflow_connection.password
+
+
+def add_s3_env(script_env):
+    airflow_connection = BaseHook.get_connection(S3_CONN_ID)
+
+    script_env["AWS_ACCESS_KEY_ID"] = airflow_connection.login
+    script_env["AWS_SECRET_ACCESS_KEY"] = airflow_connection.password
+
+
+def get_script_env():
+    script_env = os.environ.copy()
+
+    add_postgres_env(script_env)
+    add_s3_env(script_env)
 
     script_env["S3_ENDPOINT_URL"] = script_env.get(
         "S3_ENDPOINT_URL",
