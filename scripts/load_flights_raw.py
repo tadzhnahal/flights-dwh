@@ -351,6 +351,15 @@ def get_connection():
     )
 
 
+def get_log_flight_dt(prepared_rows):
+    if not prepared_rows:
+        return None
+
+    row_data = dict(zip(INSERT_COLUMNS, prepared_rows[0]))
+
+    return row_data.get("flight_dt")
+
+
 def is_file_loaded(cursor, source_key):
     sql = f"""
         select 1
@@ -367,30 +376,83 @@ def is_file_loaded(cursor, source_key):
     return row is not None
 
 
+def write_load_log(cursor, source_key, flight_dt, rows_loaded, status, error_message=None):
+    sql = f"""
+        insert into {LOG_TABLE} (
+            flow_name,
+            source_file,
+            flight_dt,
+            rows_loaded,
+            status,
+            error_message,
+            loaded_at,
+            updated_at
+        )
+        values (%s, %s, %s, %s, %s, %s, now(), now())
+    """
+
+    cursor.execute(
+        sql,
+        (
+            FLOW_NAME,
+            source_key,
+            flight_dt,
+            rows_loaded,
+            status,
+            error_message,
+        ),
+    )
+
+
 def load_flights_to_postgres(prepared_rows, source_key):
     columns_sql = ", ".join(INSERT_COLUMNS)
 
-    sql = f"""
+    insert_sql = f"""
         insert into {TARGET_TABLE} ({columns_sql})
         values %s
     """
+
+    flight_dt = get_log_flight_dt(prepared_rows)
 
     logger.info("load flights into %s", TARGET_TABLE)
 
     connection = get_connection()
 
     try:
-        with connection:
-            with connection.cursor() as cursor:
-                if is_file_loaded(cursor, source_key):
-                    logger.info("source file already loaded: %s", source_key)
-                    return
+        with connection.cursor() as cursor:
+            if is_file_loaded(cursor, source_key):
+                logger.info("source file already loaded: %s", source_key)
+                return
 
-                execute_values(cursor, sql, prepared_rows, page_size=1000)
+            try:
+                execute_values(cursor, insert_sql, prepared_rows, page_size=1000)
+                write_load_log(
+                    cursor=cursor,
+                    source_key=source_key,
+                    flight_dt=flight_dt,
+                    rows_loaded=len(prepared_rows),
+                    status="success",
+                )
+                connection.commit()
+                logger.info("flights loaded: %s", len(prepared_rows))
+            except Exception as error:
+                connection.rollback()
+
+                with connection.cursor() as error_cursor:
+                    write_load_log(
+                        cursor=error_cursor,
+                        source_key=source_key,
+                        flight_dt=flight_dt,
+                        rows_loaded=0,
+                        status="error",
+                        error_message=str(error)[:1000],
+                    )
+                connection.commit()
+
+                logger.error("flights load failed: %s", error)
+                raise
     finally:
         connection.close()
-
-    logger.info("flights loaded: %s", len(prepared_rows))
 
 
 def main():
