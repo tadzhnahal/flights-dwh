@@ -13,7 +13,7 @@ from airflow.operators.python import PythonOperator
 DAG_ID = "team_vdga_stg_dag"
 POSTGRES_CONN_ID = "edu_dwh_postgres"
 S3_CONN_ID = "team_vdga_s3"
-FLIGHT_DATE = "2026-03-01"
+DEFAULT_FLIGHT_DATE = "2026-03-01"
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 SQL_DIR = PROJECT_DIR / "sql"
@@ -95,6 +95,18 @@ def get_script_env():
     return script_env
 
 
+def get_flight_date(**context):
+    dag_run = context.get("dag_run")
+
+    if dag_run and dag_run.conf:
+        flight_date = dag_run.conf.get("flight_date")
+
+        if flight_date:
+            return flight_date
+
+    return DEFAULT_FLIGHT_DATE
+
+
 def run_sql_file(sql_file_name):
     sql_path = SQL_DIR / sql_file_name
 
@@ -113,20 +125,31 @@ def run_sql_file(sql_file_name):
         connection.close()
 
 
-def run_project_script(script_file_name, script_args):
+def run_project_script(script_file_name, script_args, **context):
     script_path = SCRIPTS_DIR / script_file_name
 
     if not script_path.exists():
         raise FileNotFoundError(f"script file not found: {script_path}")
 
+    flight_date = get_flight_date(**context)
+
+    rendered_args = []
+
+    for script_arg in script_args:
+        if script_arg == "{{ flight_date }}":
+            rendered_args.append(flight_date)
+        else:
+            rendered_args.append(script_arg)
+
     command = [
         sys.executable,
         str(script_path),
-    ] + script_args
+    ] + rendered_args
 
     print("run command:", " ".join(command))
     print("project dir:", PROJECT_DIR)
     print("scripts dir:", SCRIPTS_DIR)
+    print("flight date:", flight_date)
 
     result = subprocess.run(
         command,
@@ -209,7 +232,7 @@ with DAG(
             "script_file_name": "load_flights_raw.py",
             "script_args": [
                 "--flight-date",
-                FLIGHT_DATE,
+                "{{ flight_date }}",
                 "--load-to-postgres",
             ],
         },
@@ -222,7 +245,7 @@ with DAG(
             "script_file_name": "check_stg_quality.py",
             "script_args": [
                 "--flight-date",
-                FLIGHT_DATE,
+                "{{ flight_date }}",
             ],
         },
     )
