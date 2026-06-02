@@ -93,30 +93,45 @@ def check_flight_date(flight_date):
         raise ValueError("flight date must have format yyyy-mm-dd")
 
 
-def build_source_key(flights_prefix, flight_date):
-    return f"{flights_prefix}/{flight_date}/flights_{flight_date}.csv.gz"
+def build_source_prefix(flights_prefix, flight_date):
+    clean_prefix = flights_prefix.strip("/")
+
+    return f"{clean_prefix}/{flight_date}/"
 
 
-def check_source_file(s3_client, bucket, source_key):
-    logger.info("check source file: s3://%s/%s", bucket, source_key)
+def list_source_files(s3_client, bucket, source_prefix):
+    logger.info("list source files: s3://%s/%s", bucket, source_prefix)
+
+    source_keys = []
 
     try:
-        response = s3_client.head_object(
-            Bucket=bucket,
-            Key=source_key,
-        )
+        paginator = s3_client.get_paginator("list_objects_v2")
+
+        for page in paginator.paginate(Bucket=bucket, Prefix=source_prefix):
+            for item in page.get("Contents", []):
+                key = item.get("Key")
+
+                if key and key.endswith(".csv.gz"):
+                    source_keys.append(key)
     except ClientError as error:
-        logger.error("source file check failed: %s", error)
-        return False
+        logger.error("source files list failed: %s", error)
+        raise
 
-    size = response.get("ContentLength", 0)
-    logger.info("source file found, size: %s bytes", size)
+    source_keys = sorted(source_keys)
 
-    return True
+    if not source_keys:
+        raise FileNotFoundError(f"source files not found: s3://{bucket}/{source_prefix}*.csv.gz")
+
+    logger.info("source files found: %s", len(source_keys))
+
+    for source_key in source_keys:
+        logger.info("source file: s3://%s/%s", bucket, source_key)
+
+    return source_keys
 
 
 def download_source_file(s3_client, bucket, source_key):
-    logger.info("download source file")
+    logger.info("download source file: s3://%s/%s", bucket, source_key)
 
     response = s3_client.get_object(
         Bucket=bucket,
@@ -255,7 +270,8 @@ def warn_if_dates_differ(folder_date, sample_rows):
         )
 
 
-def print_summary(columns, rows, sample_rows):
+def print_summary(source_key, columns, rows, sample_rows):
+    logger.info("source key: %s", source_key)
     logger.info("columns: %s", columns)
     logger.info("rows: %s", len(rows))
 
@@ -358,17 +374,53 @@ def load_flights_to_postgres(prepared_rows, source_key):
         connection.close()
 
 
+def process_source_file(s3_client, bucket, source_key, folder_date, args):
+    logger.info("process source file: %s", source_key)
+
+    file_bytes = download_source_file(s3_client, bucket, source_key)
+    columns, rows, sample_rows = read_flights_gz(file_bytes)
+
+    check_columns(columns)
+    print_summary(source_key, columns, rows, sample_rows)
+    warn_if_dates_differ(folder_date, sample_rows)
+
+    prepared_rows = prepare_flight_rows(rows, source_key)
+    check_prepared_rows(prepared_rows)
+    print_prepared_preview(prepared_rows)
+
+    if args.dry_run:
+        logger.info("dry-run file finished: %s", source_key)
+        return "checked"
+
+    if args.load_to_postgres:
+        result = load_flights_to_postgres(prepared_rows, source_key)
+        logger.info("postgres load result for %s: %s", source_key, result)
+        return result
+
+    logger.warning("postgres load skipped for %s", source_key)
+    logger.warning("run with --dry-run or --load-to-postgres")
+
+    return "skipped"
+
+
+def print_result_summary(result_counts):
+    logger.info("result summary:")
+
+    for result_name in sorted(result_counts):
+        logger.info("%s files: %s", result_name, result_counts[result_name])
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--flight-date",
         required=True,
-        help="flight date in yyyy-mm-dd format",
+        help="technical folder date in yyyy-mm-dd format",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="check source file without loading into postgres",
+        help="check source files without loading into postgres",
     )
     parser.add_argument(
         "--load-to-postgres",
@@ -385,39 +437,28 @@ def main():
 
     source_bucket = get_env("SOURCE_S3_BUCKET")
     flights_prefix = get_env("FLIGHTS_PREFIX", required=False, default="flights_us_data")
-    source_key = build_source_key(flights_prefix, args.flight_date)
+    source_prefix = build_source_prefix(flights_prefix, args.flight_date)
 
     logger.info("source bucket: %s", source_bucket)
-    logger.info("source key: %s", source_key)
+    logger.info("source prefix: %s", source_prefix)
 
     s3_client = make_s3_client()
-    file_exists = check_source_file(s3_client, source_bucket, source_key)
+    source_keys = list_source_files(s3_client, source_bucket, source_prefix)
 
-    if not file_exists:
-        raise FileNotFoundError(f"source file not found: s3://{source_bucket}/{source_key}")
+    result_counts = {}
 
-    file_bytes = download_source_file(s3_client, source_bucket, source_key)
-    columns, rows, sample_rows = read_flights_gz(file_bytes)
+    for source_key in source_keys:
+        result = process_source_file(
+            s3_client=s3_client,
+            bucket=source_bucket,
+            source_key=source_key,
+            folder_date=args.flight_date,
+            args=args,
+        )
 
-    check_columns(columns)
-    print_summary(columns, rows, sample_rows)
-    warn_if_dates_differ(args.flight_date, sample_rows)
+        result_counts[result] = result_counts.get(result, 0) + 1
 
-    prepared_rows = prepare_flight_rows(rows, source_key)
-    check_prepared_rows(prepared_rows)
-    print_prepared_preview(prepared_rows)
-
-    if args.dry_run:
-        logger.info("dry-run finished")
-        return
-
-    if args.load_to_postgres:
-        result = load_flights_to_postgres(prepared_rows, source_key)
-        logger.info("postgres load result: %s", result)
-        return
-
-    logger.warning("postgres load skipped")
-    logger.warning("run with --dry-run or --load-to-postgres")
+    print_result_summary(result_counts)
 
 
 if __name__ == "__main__":
