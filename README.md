@@ -52,6 +52,8 @@ flights_us_data/2026-03-03/flights_2026-03-03.csv.gz -> 19079 строк -> flig
 
 Всего в `team_vdga_stg.flights_raw` сейчас лежит `54728` строк.
 
+<img width="1381" height="844" alt="изображение" src="https://github.com/user-attachments/assets/b0fd15bf-cb19-4b1a-94cc-c7e91e022edc" />
+
 ## Как подключиться к PostgreSQL из Jupyter
 
 Для простого чтения STG таблиц клон этого репозитория не нужен. Достаточно зайти в PostgreSQL из Jupyter и проверить таблицы `team_vdga_stg`.
