@@ -136,7 +136,7 @@ def run_project_script(script_file_name, script_args, **context):
     rendered_args = []
 
     for script_arg in script_args:
-        if script_arg == "{{ flight_date }}":
+        if script_arg == "__flight_date__":
             rendered_args.append(flight_date)
         else:
             rendered_args.append(script_arg)
@@ -232,7 +232,7 @@ with DAG(
             "script_file_name": "load_flights_raw.py",
             "script_args": [
                 "--flight-date",
-                "{{ flight_date }}",
+                "__flight_date__",
                 "--load-to-postgres",
             ],
         },
@@ -245,7 +245,7 @@ with DAG(
             "script_file_name": "check_stg_quality.py",
             "script_args": [
                 "--flight-date",
-                "{{ flight_date }}",
+                "__flight_date__",
             ],
         },
     )
