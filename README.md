@@ -1,8 +1,6 @@
 # Часть №1 проекта. STG слой и загрузка данных
 
-
 <img width="2879" height="1249" alt="изображение" src="https://github.com/user-attachments/assets/7ddd0c2a-5037-45d9-90f8-550345702e9a" />
-
 
 ## Описание
 
@@ -44,7 +42,7 @@ team_vdga_metadata.etl_load_log
 
 `team_vdga_metadata.etl_load_log` хранит лог загрузки. По нему видно, какой файл прошёл через загрузчик, сколько строк попало в STG и с каким статусом завершился запуск.
 
-Сейчас в PostgreSQL, который виден из Jupyter, лежат три технические даты:
+Сейчас в PostgreSQL, который видит Jupyter, лежат три технические даты:
 
 ```text
 flights_us_data/2026-03-01/flights_2026-03-01.csv.gz -> 19157 строк -> flight_dt = 2024-03-01
@@ -53,6 +51,120 @@ flights_us_data/2026-03-03/flights_2026-03-03.csv.gz -> 19079 строк -> flig
 ```
 
 Всего в `team_vdga_stg.flights_raw` сейчас лежит `54728` строк.
+
+## Как подключиться к PostgreSQL из Jupyter
+
+Для простого чтения STG таблиц клон этого репозитория не нужен. Достаточно зайти в PostgreSQL из Jupyter и проверить таблицы `team_vdga_stg`.
+
+Если вы продолжаете проект в этом же репозитории, добавляете SQL, DAG-и или общие файлы проекта, склонируйте репозиторий в свой Jupyter.
+
+Через HTTPS:
+
+```bash
+cd ~
+git clone https://github.com/tadzhnahal/flights-dwh.git
+cd ~/flights-dwh
+```
+
+Через SSH:
+
+```bash
+cd ~
+git clone git@github.com:tadzhnahal/flights-dwh.git
+cd ~/flights-dwh
+```
+
+Если проект уже есть в Jupyter, обновите код:
+
+```bash
+cd ~/flights-dwh
+git pull
+```
+
+Клон репозитория не переносит данные из PostgreSQL. Данные уже лежат в общей базе. Чтобы увидеть те же STG таблицы, нужен локальный `.env` с правильными переменными подключения к PostgreSQL.
+
+Файл `.env` не лежит в Git. Для подключения нужны такие переменные:
+
+```text
+POSTGRES_HOST=...
+POSTGRES_PORT=...
+POSTGRES_DB=...
+POSTGRES_USER=...
+POSTGRES_PASSWORD=...
+```
+
+Пароль не выводите в терминал и не коммитьте в Git.
+
+Если у вас есть `.env`, загрузите переменные:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Проверьте, что переменные появились. Пароль не выводите:
+
+```bash
+echo "POSTGRES_HOST=$POSTGRES_HOST"
+echo "POSTGRES_PORT=$POSTGRES_PORT"
+echo "POSTGRES_DB=$POSTGRES_DB"
+echo "POSTGRES_USER=$POSTGRES_USER"
+```
+
+Зайдите в `psql`:
+
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB"
+```
+
+Если `psql` подключился, появится приглашение вида:
+
+```text
+dwh=#
+```
+
+Внутри `psql` выполните проверочный запрос:
+
+```sql
+select
+    source_file,
+    count(*) as rows_cnt,
+    min(flight_dt) as min_flight_dt,
+    max(flight_dt) as max_flight_dt
+from team_vdga_stg.flights_raw
+group by source_file
+order by source_file;
+```
+
+Ожидаемый результат:
+
+```text
+flights_us_data/2026-03-01/flights_2026-03-01.csv.gz | 19157 | 2024-03-01 | 2024-03-01
+flights_us_data/2026-03-02/flights_2026-03-02.csv.gz | 16492 | 2024-03-02 | 2024-03-02
+flights_us_data/2026-03-03/flights_2026-03-03.csv.gz | 19079 | 2024-03-03 | 2024-03-03
+```
+
+Если вы видите три строки, значит вы подключились к нужной базе и можете строить следующие слои поверх STG.
+
+Для выхода из `psql` выполните:
+
+```sql
+\q
+```
+
+Если после перезапуска Jupyter `psql` пытается подключиться через локальный сокет `/var/run/postgresql/.s.PGSQL.5432`, значит переменные окружения не подгрузились. В этом случае снова выполните:
+
+```bash
+set -a
+source .env
+set +a
+```
 
 ## Текущая структура проекта
 
@@ -241,7 +353,7 @@ STG уже можно использовать как вход для следу
 
 Поле `timezone` сейчас пустое. Это важно учесть, если дальше появится логика с локальным временем.
 
-Airflow и Jupyter берут доступы к PostgreSQL из разных мест. Airflow использует connection `edu_dwh_postgres`, а Jupyter читает переменные из `.env`. На случай, если вы будете перезапускать свои даги через Airflow и потом проверять результат из Jupyter, нужно убедиться, что оба окружения смотрят в один и тот же PostgreSQL. Для текущей передачи данные уже лежат в PostgreSQL, который видит Jupyter.
+Airflow и Jupyter берут доступы к PostgreSQL из разных мест. Airflow использует соединение `edu_dwh_postgres`, а Jupyter читает переменные из `.env`. На случай, если вы будете перезапускать свои DAG-и через Airflow и потом проверять результат из Jupyter, нужно убедиться, что оба окружения смотрят в один и тот же PostgreSQL. Для текущей передачи данные уже лежат в PostgreSQL, который видит Jupyter.
 
 ## Ограничения
 
