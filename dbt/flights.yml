@@ -1,0 +1,50 @@
+version: 2
+
+models:
+
+  - name: flights_performed
+    description: "DDS table for completed flights"
+
+    columns:
+      - name: carrier_flight_number
+        tests:
+          - not_null
+
+      - name: flight_dttm_local
+        tests:
+          - not_null
+
+      - name: origin_airport_dk
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - carrier_flight_number
+            - flight_dttm_local
+            - origin_airport_dk
+
+
+  - name: flights_cancelled
+    description: "DDS table for cancelled flights"
+
+    columns:
+      - name: carrier_flight_number
+        tests:
+          - not_null
+
+      - name: sched_dttm_local
+        tests:
+          - not_null
+
+      - name: origin_airport_dk
+        tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - carrier_flight_number
+            - sched_dttm_local
+            - origin_airport_dk

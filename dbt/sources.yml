@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: stg
+    schema: team_vdga_stg
+    tables:
+      - name: flights_raw
+        description: "Raw flights data loaded from external source"
+
+      - name: airports
+        description: "Airports data loaded from external source"
+
+  - name: dds
+    schema: team_vdga_dds
+    tables:
+      - name: airports_timezones
+        description: "Airports timezones reference table for joins"

@@ -1,0 +1,14 @@
+name: 'team_vdga_dds'
+version: '1.0'
+config-version: 2
+
+profile: 'team_vdga_dds'
+
+model-paths: ["models"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  team_vdga_dds:
