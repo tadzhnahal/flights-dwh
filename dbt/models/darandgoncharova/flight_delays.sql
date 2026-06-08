@@ -1,7 +1,4 @@
-{{ config(
-    materialized='table',
-    schema='team_vdga_dm'
-) }}
+{{ config(materialized='table', schema='dm') }}
 
 select
     flight_dttm_local::date as flight_date,
