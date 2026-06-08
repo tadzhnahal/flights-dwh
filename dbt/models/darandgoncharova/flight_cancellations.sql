@@ -10,7 +10,8 @@ select
     carrier_code,
     origin_airport_dk,
     origin_airport_type,
+    cancellation_code,
     count(*) as total_cancelled_flights,
     now() as processed_dttm
 from {{ ref('flights_cancelled') }}
-group by 1, 2, 3, 4, 5, 6
+group by 1, 2, 3, 4, 5, 6, 7
