@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.md
+.env
+.env.*
+sql/
+scripts/
+dbt/

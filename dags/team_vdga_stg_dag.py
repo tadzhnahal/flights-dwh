@@ -13,10 +13,11 @@ from airflow.operators.python import PythonOperator
 DAG_ID = "team_vdga_stg_dag"
 POSTGRES_CONN_ID = "edu_dwh_postgres"
 S3_CONN_ID = "team_vdga_s3"
-DEFAULT_FLIGHT_DATE = "2026-03-01"
+
 FLIGHT_DATE_TEMPLATE = (
-    "{{ dag_run.conf.get('flight_date', '2026-03-01') "
-    "if dag_run and dag_run.conf else '2026-03-01' }}"
+    "{{ dag_run.conf.get('flight_date') "
+    "if dag_run and dag_run.conf and dag_run.conf.get('flight_date') "
+    "else data_interval_start.strftime('%Y-%m-%d') }}"
 )
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
@@ -156,7 +157,7 @@ with DAG(
     description="STG pipeline for team_vdga flights project",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2026, 3, 1),
-    schedule_interval=None,
+    schedule_interval="0 6 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["team_vdga", "stg", "flights"],

@@ -22,3 +22,8 @@ logs/
 
 airflow.db
 airflow-webserver.pid
+.env.*
+*.pyc
+.ipynb_checkpoints/
+available_flight_dates.txt
+stg_backfill_*.log
