@@ -4,41 +4,23 @@
 
 ## Описание
 
-Эта часть проекта закрывает первый слой хранилища данных.
+Эта часть проекта отвечает за первый слой хранилища данных. STG слой читает исходные файлы, приводит поля к единому виду и кладёт строки в PostgreSQL. Следующие части проекта читают STG и строят DDS и витрины.
 
-STG слой берёт исходные файлы, читает их, приводит поля к нужному виду и кладёт строки в PostgreSQL. Команда дальше читает эти таблицы и строит DDS и витрины.
+Проект использует два источника. Первый источник хранит рейсы в S3 в формате `.csv.gz`. Второй источник хранит справочник аэропортов в файле `ourairports.csv`. Airflow запускает пайплайн, PostgreSQL хранит таблицы, а Jupyter помогает проверить результат SQL-запросами.
 
-В проекте есть два источника:
+После доработки в проекте есть не только отдельные DAG-и по слоям, но и общий DAG-оркестратор. Он запускает цепочку `STG -> DDS -> DM` одной кнопкой и сохраняет разделение ответственности между участниками команды.
 
-```text
-S3 с рейсами в формате .csv.gz
-ourairports.csv со справочником аэропортов
-```
+## Что входит в мою часть
 
-Airflow запускает пайплайн. PostgreSQL хранит таблицы. Jupyter помогает проверить результат SQL-запросами.
+STG часть создаёт схемы `team_vdga_stg` и `team_vdga_metadata`, таблицу рейсов `team_vdga_stg.flights_raw`, таблицу аэропортов `team_vdga_stg.airports` и технический лог `team_vdga_metadata.etl_load_log`. Python-скрипты загружают справочник аэропортов и рейсы из S3. Проверки после загрузки смотрят, что данные появились, ключевые поля не пустые, а лог совпадает с фактическими строками в STG.
 
-## Что я сделал
+Загрузчик рейсов работает инкрементально. Он берёт дату запуска, ищет все `.csv.gz` файлы в папке S3 за эту дату и перед вставкой строк проверяет `etl_load_log` по `source_file`. Если файл уже имеет статус `success`, скрипт пропускает его и не создаёт дубли в `team_vdga_stg.flights_raw`.
 
-1. Создал схемы `team_vdga_stg` и `team_vdga_metadata`.
-2. Создал таблицу рейсов `team_vdga_stg.flights_raw`.
-3. Создал таблицу аэропортов `team_vdga_stg.airports`.
-4. Создал технический лог `team_vdga_metadata.etl_load_log`.
-5. Написал скрипт, который грузит справочник аэропортов.
-6. Написал скрипт, который грузит рейсы из S3.
-7. Добавил защиту от дублей по `source_file`.
-8. Собрал Airflow DAG `team_vdga_stg_dag`.
-9. Добавил проверки STG после каждого запуска.
-10. Научил скрипт искать все `.csv.gz` внутри папки за дату.
-11. Научил DAG принимать дату через параметр `flight_date`.
-12. Настроил плановый STG-запуск по дате Airflow-интервала.
-13. Догрузил исторические даты из S3 в `dwh_training`.
-14. Проверил STG из Jupyter через PostgreSQL.
-15. Добавил общий DAG `team_vdga_pipeline_dag`, который запускает слои в порядке `STG -> DDS -> DM`.
-16. Проверил общий запуск из Airflow и PostgreSQL.
+Для истории был выполнен backfill. После него STG содержит 103 исходных файла и 2 005 449 строк. Диапазон бизнес-дат в поле `flight_dt` идёт с `2024-03-01` по `2024-06-11`.
 
-## Где лежат таблицы
+## Основные таблицы
 
-Проект использует три основные схемы команды:
+Проект использует три командные схемы:
 
 ```text
 team_vdga_stg
@@ -46,7 +28,7 @@ team_vdga_dds
 team_vdga_dm
 ```
 
-STG таблицы:
+STG слой хранит исходные данные и технический лог:
 
 ```text
 team_vdga_stg.flights_raw
@@ -54,7 +36,7 @@ team_vdga_stg.airports
 team_vdga_metadata.etl_load_log
 ```
 
-DDS таблицы:
+DDS слой хранит обработанные таблицы для модели хранилища:
 
 ```text
 team_vdga_dds.airports_timezones
@@ -62,22 +44,18 @@ team_vdga_dds.flights_cancelled
 team_vdga_dds.flights_performed
 ```
 
-DM таблицы:
+DM слой хранит витрины для анализа:
 
 ```text
 team_vdga_dm.flight_cancellations
 team_vdga_dm.flight_delays
 ```
 
-`team_vdga_stg.flights_raw` хранит рейсы.
+`team_vdga_stg.flights_raw` хранит рейсы. `team_vdga_stg.airports` хранит справочник аэропортов. `team_vdga_metadata.etl_load_log` хранит историю файлов и помогает скриптам не грузить один и тот же файл повторно.
 
-`team_vdga_stg.airports` хранит справочник аэропортов.
+## База данных и секреты
 
-`team_vdga_metadata.etl_load_log` хранит историю файлов. По этой таблице скрипт понимает, какой файл уже попал в STG.
-
-## База данных
-
-Команда работает с базой:
+Команда работает с базой `dwh_training`:
 
 ```text
 POSTGRES_HOST=postgres_edu
@@ -86,70 +64,54 @@ POSTGRES_DB=dwh_training
 POSTGRES_USER=student_dwh
 ```
 
-Файл `.env.example` хранит шаблон без паролей.
+Файл `.env.example` хранит только шаблон переменных без секретов. Файл `.env` хранит реальные значения для локального запуска и Jupyter. Его нельзя класть в Git и нельзя отправлять в общий чат.
 
-Файл `.env` хранит реальные значения для локального запуска. Его нельзя класть в Git и нельзя отправлять в общий чат.
-
-Airflow не берёт пароли из Python-кода. DAG-и читают доступы из Airflow Connections:
+Airflow не хранит пароли в Python-файлах проекта. DAG-и берут доступы из Airflow Connections:
 
 ```text
 edu_dwh_postgres
 team_vdga_s3
 ```
 
-`edu_dwh_postgres` даёт доступ к PostgreSQL.
-
-`team_vdga_s3` даёт доступ к S3.
+`edu_dwh_postgres` даёт доступ к PostgreSQL. `team_vdga_s3` даёт доступ к S3. В коде DAG лежат только имена connection, а не пароли.
 
 ## Источник рейсов
 
-Рейсы лежат в S3:
+Рейсы лежат в S3 по такому пути:
 
 ```text
 s3://gsbdwhdata/flights_us_data/<flight_date>/*.csv.gz
 ```
 
-Пример:
+Пример файла:
 
 ```text
 s3://gsbdwhdata/flights_us_data/2026-06-11/flights_2026-06-11.csv.gz
 ```
 
-Дата в пути S3 показывает техническую дату файла. Дата рейса лежит внутри файла в поле `flightdate`. STG кладёт её в поле `flight_dt`.
+Дата в пути S3 показывает техническую дату папки. Дата рейса лежит внутри файла в поле `flightdate`. STG кладёт эту дату в поле `flight_dt`. Поэтому для аналитики нужно брать `flight_dt`, а не дату из пути S3.
 
-Для аналитики нужно брать `flight_dt`, а не дату из пути S3.
+Этот нюанс важен для следующих слоёв. В S3 папка может называться `2026-06-11`, но строки внутри файла могут относиться к рейсам за 2024 год. Это не ошибка загрузки, а особенность исходного датасета.
 
 ## Как STG грузит рейсы
 
-Один запуск STG грузит одну техническую дату из S3.
+Скрипт `scripts/load_flights_raw.py` грузит одну техническую дату за один запуск. Дату он получает через аргумент `--flight-date`.
 
-Скрипт получает дату через аргумент:
+Пример запуска:
 
 ```bash
 python scripts/load_flights_raw.py --flight-date 2026-06-11 --load-to-postgres
 ```
 
-Скрипт ищет все файлы внутри папки:
+Для даты `2026-06-11` скрипт читает папку:
 
 ```text
 flights_us_data/2026-06-11/
 ```
 
-Скрипт берёт только файлы с расширением:
+Внутри этой папки скрипт берёт все файлы с расширением `.csv.gz`. Затем он читает строки, проверяет обязательные поля, приводит значения к нужным типам и готовит строки для вставки в `team_vdga_stg.flights_raw`.
 
-```text
-.csv.gz
-```
-
-Перед вставкой строк скрипт смотрит в таблицу:
-
-```text
-team_vdga_metadata.etl_load_log
-```
-
-Если файл уже имеет статус `success`, скрипт пропускает файл и не пишет строки второй раз.
-
-Так STG защищает таблицу `team_vdga_stg.flights_raw` от дублей.
+Перед вставкой скрипт проверяет таблицу `team_vdga_metadata.etl_load_log`. Если файл уже имеет строку со статусом `success`, скрипт пропускает файл. Так повторный запуск не добавляет дубли.
 
 ## Как STG грузит аэропорты
 
@@ -159,34 +121,15 @@ team_vdga_metadata.etl_load_log
 team_vdga_stg.airports
 ```
 
-Если таблица уже содержит строки, скрипт пропускает повторный запуск.
+Если таблица уже содержит строки, скрипт пропускает повторный запуск. Для текущего учебного проекта этого достаточно, потому что справочник нужен как стабильная таблица для связей.
 
-Справочник аэропортов нужен, чтобы связать рейсы с названиями аэропортов, странами, регионами и координатами.
-
-Главное поле для связи:
-
-```text
-airports.iata_code
-```
-
-В рейсах ему соответствуют поля:
-
-```text
-flights_raw.origin_code
-flights_raw.dest_code
-```
+Главное поле для связи рейсов с аэропортами — `iata_code`. В таблице рейсов ему соответствуют поля `origin_code` и `dest_code`.
 
 ## Backfill старых дат
 
-Backfill нужен, если в S3 уже лежит много дат, а STG ещё не содержит эти файлы.
+Backfill нужен, если в S3 уже лежит много дат, а STG ещё не содержит эти файлы. Для этого сначала формируется файл `available_flight_dates.txt` со списком технических дат, а затем скрипты проходят по датам циклом.
 
-Сначала нужно получить список дат в файл:
-
-```text
-available_flight_dates.txt
-```
-
-Потом можно пройти по датам циклом:
+Команда backfill:
 
 ```bash
 LOG_FILE="stg_backfill_$(date +%Y%m%d_%H%M%S).log"
@@ -207,13 +150,11 @@ done < available_flight_dates.txt 2>&1 | tee "$LOG_FILE"
 echo "log saved to: $LOG_FILE"
 ```
 
-Backfill нужен для истории.
-
-Ежедневный режим должен идти через Airflow.
+Backfill нужен для исторической догрузки. Ежедневный режим должен идти через Airflow. Повторный запуск backfill не должен создавать дубли, потому что загрузчик проверяет `etl_load_log` по `source_file`.
 
 ## Текущий объём STG
 
-На момент проверки в `team_vdga_stg.flights_raw` лежат:
+На момент проверки таблица `team_vdga_stg.flights_raw` содержит:
 
 ```text
 source_files_cnt = 103
@@ -222,20 +163,41 @@ min_flight_dt = 2024-03-01
 max_flight_dt = 2024-06-11
 ```
 
-Эти числа могут вырасти после новых запусков. Поэтому актуальный объём нужно проверять SQL-запросом:
+Эти числа могут измениться после новых запусков. Поэтому README фиксирует текущую контрольную проверку, но актуальный объём нужно смотреть SQL-запросом.
 
-```sql
+Создайте SQL-файл:
+
+```bash
+cat > /tmp/check_stg_summary.sql <<'SQL'
 select
     count(distinct source_file) as source_files_cnt,
     count(*) as rows_cnt,
     min(flight_dt) as min_flight_dt,
     max(flight_dt) as max_flight_dt
 from team_vdga_stg.flights_raw;
+SQL
 ```
 
-Строки по файлам можно проверить так:
+Запустите SQL через `psql`:
 
-```sql
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" \
+  -f /tmp/check_stg_summary.sql
+```
+
+Этот запрос показывает общий объём STG, число исходных файлов и диапазон бизнес-дат.
+
+## Проверка строк по файлам
+
+Чтобы увидеть строки по каждому исходному файлу, создайте SQL-файл:
+
+```bash
+cat > /tmp/check_stg_files.sql <<'SQL'
 select
     source_file,
     count(*) as rows_cnt,
@@ -244,24 +206,62 @@ select
 from team_vdga_stg.flights_raw
 group by source_file
 order by source_file;
+SQL
 ```
 
-Лог рейсов можно проверить так:
+Запустите SQL через `psql`:
 
-```sql
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" \
+  -f /tmp/check_stg_files.sql
+```
+
+Этот запрос помогает проверить, что STG хранит много файлов, а не только первые три технические даты.
+
+## Проверка лога STG
+
+Чтобы проверить статусы загрузки рейсов, создайте SQL-файл:
+
+```bash
+cat > /tmp/check_stg_log.sql <<'SQL'
 select
     status,
     count(*) as log_rows_cnt,
-    sum(rows_loaded) as rows_loaded_sum
+    sum(rows_loaded) as rows_loaded_sum,
+    min(flight_dt) as min_flight_dt,
+    max(flight_dt) as max_flight_dt
 from team_vdga_metadata.etl_load_log
 where flow_name = 'stg_flights_raw'
 group by status
 order by status;
+SQL
 ```
 
-Дубли успешных загрузок можно проверить так:
+Запустите SQL через `psql`:
 
-```sql
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" \
+  -f /tmp/check_stg_log.sql
+```
+
+Этот запрос показывает, сколько файлов прошли успешно и сколько строк скрипт записал в лог.
+
+## Проверка дублей в STG-логе
+
+Чтобы проверить, что один и тот же файл не получил две успешные записи, создайте SQL-файл:
+
+```bash
+cat > /tmp/check_stg_duplicate_success.sql <<'SQL'
 select
     flow_name,
     source_file,
@@ -272,17 +272,26 @@ where flow_name = 'stg_flights_raw'
 group by flow_name, source_file
 having count(*) > 1
 order by source_file;
+SQL
 ```
 
-Хороший результат:
+Запустите SQL через `psql`:
 
-```text
-0 rows
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" \
+  -f /tmp/check_stg_duplicate_success.sql
 ```
+
+Хороший результат — пустой вывод с `0 rows`. Это значит, что повторный запуск не создал дубли успешной загрузки.
 
 ## Как зайти в PostgreSQL из Jupyter
 
-Данные лежат в PostgreSQL, а не в Git. Поэтому для чтения STG, DDS и DM не нужно клонировать репозиторий. Достаточно открыть Jupyter Terminal и зайти в базу.
+Для чтения таблиц не нужно клонировать репозиторий. Данные лежат в PostgreSQL, поэтому достаточно открыть Jupyter Terminal и задать переменные подключения.
 
 Задайте переменные:
 
@@ -294,7 +303,7 @@ export POSTGRES_USER="student_dwh"
 export POSTGRES_PASSWORD="sql"
 ```
 
-Пароль не выводите в терминал и не отправляйте в чат.
+Пароль не выводите в терминал и не отправляйте в чат. Его нужно использовать только в командах подключения.
 
 Проверьте вход в базу:
 
@@ -308,17 +317,11 @@ PGCONNECT_TIMEOUT=5 PGPASSWORD="$POSTGRES_PASSWORD" psql \
   -c "select current_database(), current_user, now();"
 ```
 
-Хороший результат:
+Хороший результат содержит базу `dwh_training` и пользователя `student_dwh`. Если команда вернула строку, Jupyter видит PostgreSQL.
 
-```text
-dwh_training | student_dwh
-```
+## Как зайти в интерактивный psql
 
-Если команда вернула строку, Jupyter видит PostgreSQL.
-
-## Как зайти в psql
-
-Выполните:
+Интерактивный режим нужен, если удобнее вставлять SQL вручную. Выполните команду:
 
 ```bash
 PGPASSWORD="$POSTGRES_PASSWORD" psql \
@@ -335,7 +338,7 @@ PGPASSWORD="$POSTGRES_PASSWORD" psql \
 dwh_training=#
 ```
 
-После этого нужно вставлять только SQL.
+После этого можно вставлять только SQL-запросы. Команды `PGPASSWORD=... psql ...` внутри `psql` вставлять не нужно.
 
 Для выхода выполните:
 
@@ -343,13 +346,11 @@ dwh_training=#
 \q
 ```
 
-Если вставить SQL прямо в обычный терминал, Bash выдаст ошибки вроде `command not found`. Сначала нужно зайти в `psql`, дождаться `dwh_training=#`, и только потом вставлять SQL.
+Если вставить SQL прямо в обычный терминал, Bash выдаст ошибки вроде `command not found`. В этом случае сначала зайдите в `psql`, дождитесь приглашения `dwh_training=#`, а затем вставьте SQL.
 
 ## Как работать после клона проекта
 
-Этот вариант нужен тем, кто меняет код проекта.
-
-Склонируйте репозиторий через HTTPS:
+Этот вариант нужен тем, кто меняет код проекта. Склонируйте репозиторий через HTTPS:
 
 ```bash
 cd ~
@@ -440,17 +441,11 @@ echo "POSTGRES_USER=$POSTGRES_USER"
 └── README.md
 ```
 
-Папка `dags` хранит Airflow DAG-и.
-
-Папка `scripts` хранит Python-скрипты для STG.
-
-Папка `sql` хранит SQL для схем и таблиц.
-
-Папка `dbt` хранит модели DDS и DM.
+Папка `dags` хранит Airflow DAG-и. Папка `scripts` хранит Python-скрипты для STG. Папка `sql` хранит SQL для схем и таблиц. Папка `dbt` хранит модели DDS и DM.
 
 ## Таблица рейсов
 
-Таблица `team_vdga_stg.flights_raw` хранит сырые рейсы.
+Таблица `team_vdga_stg.flights_raw` хранит сырые рейсы. В ней есть дата рейса, перевозчик, номер рейса, аэропорт вылета, аэропорт прилёта, задержки, отмены и технические поля.
 
 Ключевые поля:
 
@@ -483,34 +478,13 @@ loaded_at
 source_file
 ```
 
-Для даты рейса нужно брать `flight_dt`.
+Для даты рейса нужно брать `flight_dt`. Поле `source_file` хранит путь к исходному файлу в S3. В S3 файлы лежат в папках вида `2026-06-11`, но внутри файлов даты рейсов относятся к 2024 году. STG хранит бизнес-дату в `flight_dt`, а технический путь — в `source_file`.
 
-Поле `source_file` хранит путь к исходному файлу в S3.
-
-В S3 файлы лежат в папках вида `2026-06-11`, но внутри файлов даты рейсов относятся к 2024 году. Это не ошибка. STG хранит бизнес-дату в `flight_dt`, а технический путь — в `source_file`.
-
-В старом описании встречались поля:
-
-```text
-origin_city_name
-dest_city_name
-dep_delay_group_num
-arr_delay_group_num
-flights_cnt
-distance_group_num
-```
-
-Реальный `.csv.gz` не содержит эти поля. Поэтому STG не хранит их напрямую.
-
-Города можно взять из справочника аэропортов.
-
-Группы задержек и расстояний можно посчитать в DDS или DM.
-
-Счётчик рейсов можно задать как один рейс на строку.
+В старом описании встречались поля `origin_city_name`, `dest_city_name`, `dep_delay_group_num`, `arr_delay_group_num`, `flights_cnt` и `distance_group_num`. Реальный `.csv.gz` не содержит эти поля. Поэтому STG не хранит их напрямую. Города можно взять из справочника аэропортов, группы задержек и расстояний можно посчитать в DDS или DM, а счётчик рейсов можно задать как один рейс на строку.
 
 ## Таблица аэропортов
 
-Таблица `team_vdga_stg.airports` хранит справочник из `ourairports.csv`.
+Таблица `team_vdga_stg.airports` хранит справочник из `ourairports.csv`. В ней есть коды аэропортов, названия, типы, страны, регионы, координаты и техническое поле загрузки.
 
 Ключевые поля:
 
@@ -531,32 +505,15 @@ timezone
 loaded_at
 ```
 
-Главное поле для связи с рейсами:
+Главное поле для связи с рейсами — `iata_code`. В таблице рейсов ему соответствуют `origin_code` и `dest_code`.
 
-```text
-iata_code
-```
-
-В рейсах ему соответствуют:
-
-```text
-origin_code
-dest_code
-```
-
-В таблице есть поле `timezone`, но текущий `airports.csv` не содержит таймзоны. Поэтому STG оставляет `timezone` пустым.
-
-Если следующему слою нужны таймзоны, команда должна взять их из другого источника. Сейчас DDS использует отдельную таблицу:
-
-```text
-team_vdga_dds.airports_timezones
-```
+В таблице есть поле `timezone`, но текущий `airports.csv` не содержит таймзоны. Поэтому STG оставляет `timezone` пустым. Если следующему слою нужны таймзоны, команда должна взять их из другого источника. Сейчас DDS использует отдельную таблицу `team_vdga_dds.airports_timezones`.
 
 ## Технический лог
 
-Таблица `team_vdga_metadata.etl_load_log` хранит историю файлов.
+Таблица `team_vdga_metadata.etl_load_log` хранит историю файлов. Лог содержит имя потока, путь к файлу, дату рейса, число строк, статус, текст ошибки и время записи.
 
-Лог содержит:
+Ключевые поля:
 
 ```text
 flow_name
@@ -569,15 +526,7 @@ loaded_at
 updated_at
 ```
 
-Для рейсов используется поток:
-
-```text
-stg_flights_raw
-```
-
-Скрипт смотрит в лог перед вставкой строк. Если файл уже имеет статус `success`, скрипт пропускает файл.
-
-В таблице есть уникальный индекс для успешных файлов. Он не даёт записать один и тот же `source_file` два раза со статусом `success`.
+Для рейсов используется поток `stg_flights_raw`. Скрипт смотрит в лог перед вставкой строк. Если файл уже имеет статус `success`, скрипт пропускает файл. В таблице есть уникальный индекс для успешных файлов, поэтому один и тот же `source_file` не должен получить два успешных лога.
 
 ## Контракт для следующих слоёв
 
@@ -595,31 +544,11 @@ flights_raw.origin_code = airports.iata_code
 flights_raw.dest_code = airports.iata_code
 ```
 
-Дата рейса лежит здесь:
-
-```text
-flights_raw.flight_dt
-```
-
-Путь к исходному файлу лежит здесь:
-
-```text
-flights_raw.source_file
-```
-
-DDS берёт STG, добавляет справочник таймзон и строит таблицы выполненных и отменённых рейсов.
-
-DM берёт DDS и строит витрины для анализа задержек и отмен.
+Дата рейса лежит в `flights_raw.flight_dt`. Путь к исходному файлу лежит в `flights_raw.source_file`. DDS берёт STG, добавляет справочник таймзон и строит таблицы выполненных и отменённых рейсов. DM берёт DDS и строит витрины для анализа задержек и отмен.
 
 ## STG DAG
 
-STG DAG называется:
-
-```text
-team_vdga_stg_dag
-```
-
-Файл:
+STG DAG называется `team_vdga_stg_dag`. Он лежит в файле:
 
 ```text
 dags/team_vdga_stg_dag.py
@@ -645,9 +574,7 @@ DAG работает по расписанию:
 0 6 * * *
 ```
 
-Один плановый запуск грузит одну дату. Если дату не передать вручную, DAG берёт дату прошлого Airflow-интервала.
-
-DAG также принимает ручной параметр:
+Один плановый запуск грузит одну дату. Если дату не передать вручную, DAG берёт дату прошлого Airflow-интервала. При ручном запуске можно передать дату через JSON:
 
 ```json
 {
@@ -659,19 +586,13 @@ DAG также принимает ручной параметр:
 
 ## DDS DAG
 
-DDS DAG называется:
-
-```text
-team_vdga_dds_dag
-```
-
-Файл:
+DDS DAG называется `team_vdga_dds_dag`. Он лежит в файле:
 
 ```text
 dags/team_vdga_dds_dag.py
 ```
 
-Он создаёт DDS-схему, грузит таблицу таймзон аэропортов и запускает dbt-модели:
+DAG создаёт DDS-схему, грузит таблицу таймзон аэропортов и запускает dbt-модели:
 
 ```text
 flights_performed
@@ -688,19 +609,13 @@ team_vdga_dds.flights_cancelled
 
 ## DM DAG
 
-DM DAG называется:
-
-```text
-team_vdga_dm_dag
-```
-
-Файл:
+DM DAG называется `team_vdga_dm_dag`. Он лежит в файле:
 
 ```text
 dags/team_vdga_dm_dag.py
 ```
 
-Он запускает dbt-модели витрин:
+DAG запускает dbt-модели витрин:
 
 ```text
 flight_delays
@@ -714,53 +629,27 @@ team_vdga_dm.flight_delays
 team_vdga_dm.flight_cancellations
 ```
 
-## Общий DAG
+## Общий DAG-оркестратор
 
-Общий DAG называется:
-
-```text
-team_vdga_pipeline_dag
-```
-
-Файл:
+Общий DAG называется `team_vdga_pipeline_dag`. Он лежит в файле:
 
 ```text
 dags/team_vdga_pipeline_dag.py
 ```
 
-Он запускает три DAG-а по порядку:
+Оркестратор запускает три DAG-а по порядку:
 
 ```text
 team_vdga_stg_dag -> team_vdga_dds_dag -> team_vdga_dm_dag
 ```
 
-Этот DAG не содержит SQL, Python-загрузчиков и dbt-моделей. Он только запускает готовые DAG-и и ждёт, пока каждый слой дойдёт до `success`.
+Этот DAG не содержит SQL, Python-загрузчиков и dbt-моделей. Он только запускает готовые DAG-и и ждёт, пока каждый слой завершится со статусом `success`.
 
-Такой подход сохраняет разделение по слоям:
-
-```text
-STG — загрузка исходных данных
-DDS — слой данных для модели хранилища
-DM — витрины для анализа
-```
-
-У команды остаются отдельные DAG-и по зонам ответственности. При этом появляется один общий запуск полного пайплайна.
+Такой подход сохраняет отдельные зоны ответственности. STG отвечает за исходные данные, DDS отвечает за обработанный слой, DM отвечает за витрины. При этом у команды появляется один общий запуск полного пайплайна.
 
 ## Как запустить полный пайплайн
 
-Откройте Airflow и найдите DAG:
-
-```text
-team_vdga_pipeline_dag
-```
-
-Нажмите trigger.
-
-Если интерфейс не даёт передать JSON, можно запустить DAG без параметров. В DAG есть запасная дата:
-
-```text
-2026-06-11
-```
+Откройте Airflow и найдите DAG `team_vdga_pipeline_dag`. Нажмите trigger. Если интерфейс не даёт передать JSON, можно запустить DAG без параметров: в DAG есть запасная дата `2026-06-11`.
 
 Если интерфейс даёт передать JSON, можно указать дату явно:
 
@@ -780,15 +669,9 @@ run_dm
 finish
 ```
 
-Если `run_stg` упал, нужно открыть `team_vdga_stg_dag`.
+Если упала задача `run_stg`, нужно открыть `team_vdga_stg_dag`. Если упала задача `run_dds`, нужно открыть `team_vdga_dds_dag`. Если упала задача `run_dm`, нужно открыть `team_vdga_dm_dag`. Ошибка будет в дочернем DAG-е, потому что оркестратор только ждёт результат.
 
-Если `run_dds` упал, нужно открыть `team_vdga_dds_dag`.
-
-Если `run_dm` упал, нужно открыть `team_vdga_dm_dag`.
-
-Ошибка будет в дочернем DAG-е.
-
-## Проверки после общего запуска
+## Проверка после общего запуска
 
 Сначала проверьте вход в PostgreSQL:
 
@@ -802,57 +685,10 @@ PGCONNECT_TIMEOUT=5 PGPASSWORD="$POSTGRES_PASSWORD" psql \
   -c "select current_database(), current_user, now();"
 ```
 
-Проверьте STG:
+Затем проверьте строки в основных таблицах команды. Сначала создайте SQL-файл:
 
 ```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -c "
-select
-    count(distinct source_file) as source_files_cnt,
-    count(*) as rows_cnt,
-    min(flight_dt) as min_flight_dt,
-    max(flight_dt) as max_flight_dt
-from team_vdga_stg.flights_raw;
-"
-```
-
-Проверьте, что STG не добавил дубли:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -c "
-select
-    flow_name,
-    source_file,
-    count(*) as success_rows_cnt
-from team_vdga_metadata.etl_load_log
-where flow_name = 'stg_flights_raw'
-  and status = 'success'
-group by flow_name, source_file
-having count(*) > 1
-order by source_file;
-"
-```
-
-Проверьте таблицы команды:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" <<'SQL'
+cat > /tmp/check_team_vdga_layers.sql <<'SQL'
 select
     'team_vdga_stg.flights_raw' as table_name,
     count(*) as rows_cnt
@@ -888,11 +724,23 @@ from team_vdga_dm.flight_cancellations;
 SQL
 ```
 
+Запустите SQL через `psql`:
+
+```bash
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
+  -P pager=off \
+  -h "$POSTGRES_HOST" \
+  -p "$POSTGRES_PORT" \
+  -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" \
+  -f /tmp/check_team_vdga_layers.sql
+```
+
+Эта проверка показывает, что все слои команды существуют и содержат строки.
+
 ## Результат последней проверки
 
-После запуска `team_vdga_pipeline_dag` Airflow показал зелёный run.
-
-Jupyter увидел PostgreSQL:
+После запуска `team_vdga_pipeline_dag` Airflow показал зелёный run. Jupyter увидел PostgreSQL:
 
 ```text
 current_database = dwh_training
@@ -908,11 +756,7 @@ min_flight_dt = 2024-03-01
 max_flight_dt = 2024-06-11
 ```
 
-Запрос на дубли успешных загрузок вернул:
-
-```text
-0 rows
-```
+Запрос на дубли успешных загрузок вернул `0 rows`.
 
 DDS показал строки:
 
@@ -929,47 +773,27 @@ team_vdga_dm.flight_cancellations = 15133
 team_vdga_dm.flight_delays = 1054416
 ```
 
-DM показал диапазон дат:
+DM показал такой диапазон дат:
 
 ```text
 team_vdga_dm.flight_cancellations: 2024-03-01 — 2024-06-12
 team_vdga_dm.flight_delays: 2024-02-29 — 2024-06-12
 ```
 
-DM может иметь даты чуть шире STG, потому что DDS собирает локальное время из даты, времени рейса и таймзоны. Часть рейсов может перейти на соседний календарный день.
+DM может иметь даты чуть шире STG, потому что DDS собирает локальное время из даты рейса, времени рейса и таймзоны. Часть рейсов может перейти на соседний календарный день.
 
-## Что важно помнить дальше
+## Что учитывать дальше
 
-STG уже можно использовать как вход для DDS и DM.
+Следующие слои должны читать данные из PostgreSQL внутри учебной инфраструктуры, а не из исходных `.csv.gz` напрямую. STG уже хранит загруженный и проверенный слой, поэтому DDS и DM должны опираться на `team_vdga_stg.flights_raw` и `team_vdga_stg.airports`.
 
-Новые слои должны читать PostgreSQL внутри учебной инфраструктуры, а не исходные `.csv.gz` напрямую.
+Для аналитики нужно брать дату из `flight_dt`. Дата в пути S3 показывает техническую папку файла, а не дату рейса. Поле `timezone` в STG сейчас пустое, потому что текущий `ourairports.csv` не содержит таймзоны. Для локального времени DDS использует отдельный справочник таймзон.
 
-Дату рейса нужно брать из `flight_dt`.
+Если следующие слои содержат фильтры только на первые три даты, эти фильтры нужно убрать. После backfill STG хранит больше данных, и DDS/DM должны работать по всему доступному диапазону.
 
-Дата в пути S3 показывает техническую папку файла, а не дату рейса.
-
-STG не заполняет `timezone`, потому что текущий источник аэропортов не содержит это поле.
-
-Airflow использует connection `edu_dwh_postgres`. Jupyter читает переменные из `.env`. Оба окружения должны смотреть в одну базу:
-
-```text
-dwh_training
-```
-
-Если следующие слои содержат фильтры только на первые три даты, эти фильтры нужно убрать.
-
-Для полного запуска проекта можно запускать `team_vdga_pipeline_dag`. Он сам запустит STG, потом DDS, потом DM.
+Для полного запуска проекта можно запускать `team_vdga_pipeline_dag`. Он запустит STG, потом DDS, потом DM.
 
 ## Ограничения
 
-STG обрабатывает все `.csv.gz` файлы внутри папки за дату.
+STG обрабатывает все `.csv.gz` файлы внутри папки за дату. Справочник аэропортов не обновляет отдельные строки: если таблица уже содержит данные, скрипт пропускает повторный запуск. Для учебного проекта этого достаточно.
 
-Справочник аэропортов не обновляет отдельные строки. Если таблица уже содержит данные, скрипт пропускает повторный запуск. Для учебного проекта этого достаточно.
-
-STG не заполняет поле `timezone`, потому что текущий `ourairports.csv` не содержит это поле.
-
-Исторический backfill запускается вручную из Jupyter.
-
-Ежедневный STG-режим идёт через Airflow.
-
-Полный командный запуск идёт через `team_vdga_pipeline_dag`.
+STG не заполняет поле `timezone`, потому что текущий `ourairports.csv` не содержит это поле. Исторический backfill запускается вручную из Jupyter. Ежедневный STG-режим идёт через Airflow. Полный командный запуск идёт через `team_vdga_pipeline_dag`.
