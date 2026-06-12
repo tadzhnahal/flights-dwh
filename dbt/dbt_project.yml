@@ -1,8 +1,8 @@
-name: 'team_vdga_dds'
+name: "team_vdga"
 version: '1.0'
 config-version: 2
 
-profile: 'team_vdga_dds'
+profile: 'team_vdga'
 
 model-paths: ["models"]
 
@@ -11,4 +11,5 @@ clean-targets:
   - "dbt_packages"
 
 models:
-  team_vdga_dds:
+  team_vdga:
+    +materialized: view

@@ -1,4 +1,4 @@
-team_vdga_dds:
+team_vdga:
   target: dev
   outputs:
     dev:
@@ -8,5 +8,5 @@ team_vdga_dds:
       password: "{{ env_var('POSTGRES_PASSWORD') }}"
       port: "{{ env_var('POSTGRES_PORT') | int }}"
       dbname: "{{ env_var('POSTGRES_DB') }}"
-      schema: team_vdga_dds
+      schema: team_vdga
       threads: 4
