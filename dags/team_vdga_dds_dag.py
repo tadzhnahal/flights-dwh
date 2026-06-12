@@ -80,6 +80,9 @@ def load_airports_timezones():
                         timezone TEXT
                     )
                 """)
+                cur.execute("""
+                    TRUNCATE TABLE team_vdga_dds.airports_timezones
+                """)
 
                 buffer = io.StringIO()
                 df.to_csv(buffer, index=False, header=False)
