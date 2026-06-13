@@ -4,15 +4,17 @@
 
 ## Описание
 
-Эта часть проекта отвечает за первый слой хранилища данных. STG слой читает исходные файлы, приводит поля к единому виду и кладёт строки в PostgreSQL. Следующие части проекта читают STG и строят DDS и витрины.
+Эта часть проекта отвечает за первый слой хранилища данных. STG слой принимает исходные файлы, приводит поля к единому виду и кладёт строки в PostgreSQL. Следующие слои уже не читают сырые `.csv.gz` напрямую. Они берут данные из STG и строят DDS и витрины.
 
 Проект использует два источника. Первый источник хранит рейсы в S3 в формате `.csv.gz`. Второй источник хранит справочник аэропортов в файле `ourairports.csv`. Airflow запускает пайплайн, PostgreSQL хранит таблицы, а Jupyter помогает проверить результат SQL-запросами.
 
-После доработки в проекте есть не только отдельные DAG-и по слоям, но и общий DAG-оркестратор. Он запускает цепочку `STG -> DDS -> DM` одной кнопкой и сохраняет разделение ответственности между участниками команды.
+После доработки в проекте есть отдельные DAG-и по слоям и общий DAG-оркестратор. Отдельные DAG-и сохраняют зоны ответственности, а оркестратор запускает всю цепочку `STG -> DDS -> DM` одной кнопкой.
 
 ## Что входит в мою часть
 
-STG часть создаёт схемы `team_vdga_stg` и `team_vdga_metadata`, таблицу рейсов `team_vdga_stg.flights_raw`, таблицу аэропортов `team_vdga_stg.airports` и технический лог `team_vdga_metadata.etl_load_log`. Python-скрипты загружают справочник аэропортов и рейсы из S3. Проверки после загрузки смотрят, что данные появились, ключевые поля не пустые, а лог совпадает с фактическими строками в STG.
+STG часть создаёт схемы `team_vdga_stg` и `team_vdga_metadata`, таблицу рейсов `team_vdga_stg.flights_raw`, таблицу аэропортов `team_vdga_stg.airports` и технический лог `team_vdga_metadata.etl_load_log`.
+
+Python-скрипты загружают справочник аэропортов и рейсы из S3. После загрузки проверки смотрят, что данные появились, ключевые поля не пустые, а лог совпадает с фактическими строками в STG.
 
 Загрузчик рейсов работает инкрементально. Он берёт дату запуска, ищет все `.csv.gz` файлы в папке S3 за эту дату и перед вставкой строк проверяет `etl_load_log` по `source_file`. Если файл уже имеет статус `success`, скрипт пропускает его и не создаёт дубли в `team_vdga_stg.flights_raw`.
 
@@ -73,7 +75,7 @@ edu_dwh_postgres
 team_vdga_s3
 ```
 
-`edu_dwh_postgres` даёт доступ к PostgreSQL. `team_vdga_s3` даёт доступ к S3. В коде DAG лежат только имена connection, а не пароли.
+`edu_dwh_postgres` даёт доступ к PostgreSQL. `team_vdga_s3` даёт доступ к S3. В коде DAG лежат только имена connections, а не пароли.
 
 ## Источник рейсов
 
@@ -89,9 +91,9 @@ s3://gsbdwhdata/flights_us_data/<flight_date>/*.csv.gz
 s3://gsbdwhdata/flights_us_data/2026-06-11/flights_2026-06-11.csv.gz
 ```
 
-Дата в пути S3 показывает техническую дату папки. Дата рейса лежит внутри файла в поле `flightdate`. STG кладёт эту дату в поле `flight_dt`. Поэтому для аналитики нужно брать `flight_dt`, а не дату из пути S3.
+Дата в пути S3 показывает техническую дату папки. Дата рейса лежит внутри файла в поле `flightdate`. STG кладёт эту дату в поле `flight_dt`.
 
-Этот нюанс важен для следующих слоёв. В S3 папка может называться `2026-06-11`, но строки внутри файла могут относиться к рейсам за 2024 год. Это не ошибка загрузки, а особенность исходного датасета.
+Поэтому для аналитики нужно брать `flight_dt`, а не дату из пути S3. В S3 папка может называться `2026-06-11`, но строки внутри файла могут относиться к рейсам за 2024 год. Это не ошибка загрузки, а особенность исходного датасета.
 
 ## Как STG грузит рейсы
 
@@ -152,143 +154,6 @@ echo "log saved to: $LOG_FILE"
 
 Backfill нужен для исторической догрузки. Ежедневный режим должен идти через Airflow. Повторный запуск backfill не должен создавать дубли, потому что загрузчик проверяет `etl_load_log` по `source_file`.
 
-## Текущий объём STG
-
-На момент проверки таблица `team_vdga_stg.flights_raw` содержит:
-
-```text
-source_files_cnt = 103
-rows_cnt = 2005449
-min_flight_dt = 2024-03-01
-max_flight_dt = 2024-06-11
-```
-
-Эти числа могут измениться после новых запусков. Поэтому README фиксирует текущую контрольную проверку, но актуальный объём нужно смотреть SQL-запросом.
-
-Создайте SQL-файл:
-
-```bash
-cat > /tmp/check_stg_summary.sql <<'SQL'
-select
-    count(distinct source_file) as source_files_cnt,
-    count(*) as rows_cnt,
-    min(flight_dt) as min_flight_dt,
-    max(flight_dt) as max_flight_dt
-from team_vdga_stg.flights_raw;
-SQL
-```
-
-Запустите SQL через `psql`:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -f /tmp/check_stg_summary.sql
-```
-
-Этот запрос показывает общий объём STG, число исходных файлов и диапазон бизнес-дат.
-
-## Проверка строк по файлам
-
-Чтобы увидеть строки по каждому исходному файлу, создайте SQL-файл:
-
-```bash
-cat > /tmp/check_stg_files.sql <<'SQL'
-select
-    source_file,
-    count(*) as rows_cnt,
-    min(flight_dt) as min_flight_dt,
-    max(flight_dt) as max_flight_dt
-from team_vdga_stg.flights_raw
-group by source_file
-order by source_file;
-SQL
-```
-
-Запустите SQL через `psql`:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -f /tmp/check_stg_files.sql
-```
-
-Этот запрос помогает проверить, что STG хранит много файлов, а не только первые три технические даты.
-
-## Проверка лога STG
-
-Чтобы проверить статусы загрузки рейсов, создайте SQL-файл:
-
-```bash
-cat > /tmp/check_stg_log.sql <<'SQL'
-select
-    status,
-    count(*) as log_rows_cnt,
-    sum(rows_loaded) as rows_loaded_sum,
-    min(flight_dt) as min_flight_dt,
-    max(flight_dt) as max_flight_dt
-from team_vdga_metadata.etl_load_log
-where flow_name = 'stg_flights_raw'
-group by status
-order by status;
-SQL
-```
-
-Запустите SQL через `psql`:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -f /tmp/check_stg_log.sql
-```
-
-Этот запрос показывает, сколько файлов прошли успешно и сколько строк скрипт записал в лог.
-
-## Проверка дублей в STG-логе
-
-Чтобы проверить, что один и тот же файл не получил две успешные записи, создайте SQL-файл:
-
-```bash
-cat > /tmp/check_stg_duplicate_success.sql <<'SQL'
-select
-    flow_name,
-    source_file,
-    count(*) as success_rows_cnt
-from team_vdga_metadata.etl_load_log
-where flow_name = 'stg_flights_raw'
-  and status = 'success'
-group by flow_name, source_file
-having count(*) > 1
-order by source_file;
-SQL
-```
-
-Запустите SQL через `psql`:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -f /tmp/check_stg_duplicate_success.sql
-```
-
-Хороший результат — пустой вывод с `0 rows`. Это значит, что повторный запуск не создал дубли успешной загрузки.
-
 ## Как зайти в PostgreSQL из Jupyter
 
 Для чтения таблиц не нужно клонировать репозиторий. Данные лежат в PostgreSQL, поэтому достаточно открыть Jupyter Terminal и задать переменные подключения.
@@ -305,7 +170,7 @@ export POSTGRES_PASSWORD="sql"
 
 Пароль не выводите в терминал и не отправляйте в чат. Его нужно использовать только в командах подключения.
 
-Проверьте вход в базу:
+Сначала проверьте, что Jupyter видит PostgreSQL:
 
 ```bash
 PGCONNECT_TIMEOUT=5 PGPASSWORD="$POSTGRES_PASSWORD" psql \
@@ -317,11 +182,9 @@ PGCONNECT_TIMEOUT=5 PGPASSWORD="$POSTGRES_PASSWORD" psql \
   -c "select current_database(), current_user, now();"
 ```
 
-Хороший результат содержит базу `dwh_training` и пользователя `student_dwh`. Если команда вернула строку, Jupyter видит PostgreSQL.
+Хороший результат содержит базу `dwh_training` и пользователя `student_dwh`.
 
-## Как зайти в интерактивный psql
-
-Интерактивный режим нужен, если удобнее вставлять SQL вручную. Выполните команду:
+После этого зайдите в интерактивный `psql`:
 
 ```bash
 PGPASSWORD="$POSTGRES_PASSWORD" psql \
@@ -338,7 +201,7 @@ PGPASSWORD="$POSTGRES_PASSWORD" psql \
 dwh_training=#
 ```
 
-После этого можно вставлять только SQL-запросы. Команды `PGPASSWORD=... psql ...` внутри `psql` вставлять не нужно.
+Дальше вставляйте только SQL-запросы. Команды `PGPASSWORD=... psql ...` внутри `psql` вставлять не нужно.
 
 Для выхода выполните:
 
@@ -347,6 +210,138 @@ dwh_training=#
 ```
 
 Если вставить SQL прямо в обычный терминал, Bash выдаст ошибки вроде `command not found`. В этом случае сначала зайдите в `psql`, дождитесь приглашения `dwh_training=#`, а затем вставьте SQL.
+
+## Контрольные проверки STG
+
+Этот блок выполняется внутри `psql`. Сначала зайдите в базу по команде из предыдущего раздела, дождитесь приглашения `dwh_training=#`, а затем выполняйте SQL-запросы ниже.
+
+### Проверка подключения
+
+```sql
+select
+    current_database() as database_name,
+    current_user as user_name,
+    now() as check_dttm;
+```
+
+Этот запрос показывает, что подключение идёт к нужной базе и под нужным пользователем.
+
+### Текущий объём STG
+
+На момент проверки таблица `team_vdga_stg.flights_raw` содержит:
+
+```text
+source_files_cnt = 103
+rows_cnt = 2005449
+min_flight_dt = 2024-03-01
+max_flight_dt = 2024-06-11
+```
+
+Эти числа могут измениться после новых запусков. Поэтому README фиксирует текущую контрольную проверку, но актуальный объём нужно смотреть SQL-запросом:
+
+```sql
+select
+    count(distinct source_file) as source_files_cnt,
+    count(*) as rows_cnt,
+    min(flight_dt) as min_flight_dt,
+    max(flight_dt) as max_flight_dt
+from team_vdga_stg.flights_raw;
+```
+
+Этот запрос показывает общий объём STG, число исходных файлов и диапазон бизнес-дат.
+
+### Дубли по source_file
+
+```sql
+select
+    flow_name,
+    source_file,
+    count(*) as success_rows_cnt
+from team_vdga_metadata.etl_load_log
+where flow_name = 'stg_flights_raw'
+  and status = 'success'
+group by flow_name, source_file
+having count(*) > 1
+order by source_file;
+```
+
+Хороший результат — пустой вывод с `0 rows`. Это значит, что повторный запуск не создал дубли успешной загрузки.
+
+### Лог STG
+
+```sql
+select
+    status,
+    count(*) as log_rows_cnt,
+    sum(rows_loaded) as rows_loaded_sum,
+    min(flight_dt) as min_flight_dt,
+    max(flight_dt) as max_flight_dt
+from team_vdga_metadata.etl_load_log
+where flow_name = 'stg_flights_raw'
+group by status
+order by status;
+```
+
+Этот запрос показывает, сколько файлов прошли успешно и сколько строк скрипт записал в лог.
+
+### Основные STG-таблицы
+
+```sql
+select
+    'team_vdga_stg.flights_raw' as table_name,
+    count(*) as rows_cnt
+from team_vdga_stg.flights_raw
+
+union all
+
+select
+    'team_vdga_stg.airports' as table_name,
+    count(*) as rows_cnt
+from team_vdga_stg.airports;
+```
+
+Этот запрос показывает, что таблица рейсов и справочник аэропортов существуют и содержат строки.
+
+### Связь рейсов со справочником аэропортов
+
+```sql
+select
+    f.origin_code,
+    ao.name as origin_airport_name,
+    f.dest_code,
+    ad.name as dest_airport_name,
+    count(*) as flights_cnt
+from team_vdga_stg.flights_raw f
+left join team_vdga_stg.airports ao
+    on f.origin_code = ao.iata_code
+left join team_vdga_stg.airports ad
+    on f.dest_code = ad.iata_code
+group by
+    f.origin_code,
+    ao.name,
+    f.dest_code,
+    ad.name
+order by flights_cnt desc
+limit 10;
+```
+
+Запрос показывает, что `origin_code` и `dest_code` из рейсов можно связать с `iata_code` из справочника аэропортов.
+
+### Важные поля для следующих слоёв
+
+```sql
+select
+    count(*) as rows_without_flight_dt
+from team_vdga_stg.flights_raw
+where flight_dt is null;
+
+select
+    count(*) as rows_without_source_file
+from team_vdga_stg.flights_raw
+where source_file is null;
+```
+
+Хороший результат — нули. `flight_dt` нужен следующим слоям для работы с датами. `source_file` нужен для контроля происхождения строк и защиты от дублей.
 
 ## Как работать после клона проекта
 
@@ -673,22 +668,26 @@ finish
 
 ## Проверка после общего запуска
 
-Сначала проверьте вход в PostgreSQL:
+Сначала зайдите в PostgreSQL из Jupyter:
 
 ```bash
-PGCONNECT_TIMEOUT=5 PGPASSWORD="$POSTGRES_PASSWORD" psql \
+PGPASSWORD="$POSTGRES_PASSWORD" psql \
   -P pager=off \
   -h "$POSTGRES_HOST" \
   -p "$POSTGRES_PORT" \
   -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -c "select current_database(), current_user, now();"
+  -d "$POSTGRES_DB"
 ```
 
-Затем проверьте строки в основных таблицах команды. Сначала создайте SQL-файл:
+После входа появится приглашение:
 
-```bash
-cat > /tmp/check_team_vdga_layers.sql <<'SQL'
+```text
+dwh_training=#
+```
+
+Затем выполните SQL-запрос внутри `psql`:
+
+```sql
 select
     'team_vdga_stg.flights_raw' as table_name,
     count(*) as rows_cnt
@@ -721,19 +720,6 @@ select
     'team_vdga_dm.flight_cancellations' as table_name,
     count(*) as rows_cnt
 from team_vdga_dm.flight_cancellations;
-SQL
-```
-
-Запустите SQL через `psql`:
-
-```bash
-PGPASSWORD="$POSTGRES_PASSWORD" psql \
-  -P pager=off \
-  -h "$POSTGRES_HOST" \
-  -p "$POSTGRES_PORT" \
-  -U "$POSTGRES_USER" \
-  -d "$POSTGRES_DB" \
-  -f /tmp/check_team_vdga_layers.sql
 ```
 
 Эта проверка показывает, что все слои команды существуют и содержат строки.
