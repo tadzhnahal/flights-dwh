@@ -44,6 +44,49 @@ def run_dbt_command(args):
 
     result.check_returncode()
 
+def create_clickhouse_proxies():
+    import subprocess
+    import sys
+
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "--quiet", "clickhouse-connect"
+    ])
+
+    import clickhouse_connect
+
+    env_vars = {}
+    env_path = PROJECT_DIR / ".env"
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and "=" in line:
+                key, value = line.split("=", 1)
+                env_vars[key] = value
+
+    client = clickhouse_connect.get_client(
+        host=env_vars["CLICKHOUSE_HOST"],
+        port=int(env_vars["CLICKHOUSE_PORT"]),
+        username=env_vars["CLICKHOUSE_USER"],
+        password=env_vars["CLICKHOUSE_PASSWORD"],
+        secure=False,
+    )
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS team_vdga_dm_flight_delays
+    ENGINE = PostgreSQL(
+        '10.129.0.31:6432', 'dwh_training', 'flight_delays',
+        'student_dwh', 'sql', 'team_vdga_dm')
+    """)
+
+    client.command("""
+    CREATE TABLE IF NOT EXISTS team_vdga_dm_flight_cancellations
+    ENGINE = PostgreSQL(
+        '10.129.0.31:6432', 'dwh_training', 'flight_cancellations',
+        'student_dwh', 'sql', 'team_vdga_dm')
+    """)
+
+    print("ClickHouse proxy tables created/verified.")
+
 
 with DAG(
     dag_id=DAG_ID,
@@ -73,6 +116,11 @@ with DAG(
         },
     )
 
+    create_clickhouse_proxies_task = PythonOperator(
+        task_id="create_clickhouse_proxies",
+        python_callable=create_clickhouse_proxies,
+    )
+
     finish = EmptyOperator(task_id="finish")
 
-    start >> dbt_run_dm >> dbt_test_dm >> finish
+    start >> dbt_run_dm >> dbt_test_dm >> create_clickhouse_proxies_task >> finish
